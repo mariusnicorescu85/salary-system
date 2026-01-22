@@ -204,7 +204,7 @@ def main():
                 st.warning("⚠️ Base ID or table name not configured in config/shops.yaml")
     
     # Main content area
-    tab1, tab2, tab3, tab4, tab5 = st.tabs(["Calculate", "Results", "Airtable Preview", "Monthly Adjustments", "Configuration"])
+    tab1, tab2, tab3, tab4 = st.tabs(["Calculate", "Results", "Airtable Preview", "Monthly Adjustments"])
     
     with tab1:
         st.header(f"💰 Calculate Salaries - {shop_config['name']}")
@@ -1293,20 +1293,5 @@ Table Name: {repr(table_name)} (type: {type(table_name).__name__})
                             st.cache_data.clear()
                             st.rerun()
     
-    with tab5:
-        st.header("Configuration")
-        st.info("Edit configuration files in the `config/` directory")
-        
-        st.subheader("Shop Configuration")
-        st.code(Path('config/shops.yaml').read_text() if Path('config/shops.yaml').exists() else "Not found")
-        
-        st.subheader(f"Employee Configuration - {selected_shop}")
-        emp_config_path = Path(shop_config['employee_config'])
-        if emp_config_path.exists():
-            st.code(emp_config_path.read_text())
-        else:
-            st.error(f"Configuration file not found: {emp_config_path}")
-
-
 if __name__ == "__main__":
     main()
