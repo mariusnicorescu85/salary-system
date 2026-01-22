@@ -1,0 +1,499 @@
+"""
+Salary Calculation Engine
+Handles all payment calculations based on employee conditions
+"""
+
+from typing import Dict, List, Optional
+from datetime import datetime
+import pandas as pd
+
+
+class CalculationEngine:
+    """Main calculation engine for salary calculations"""
+    
+    def __init__(self, employee_config: Dict, bonus_config: Dict):
+        self.employee_config = employee_config
+        self.bonus_config = bonus_config
+    
+    def calculate_tiered_commission(self, total_sales: float, tiers: List[Dict]) -> float:
+        """Calculate tiered commission based on sales tiers"""
+        commission = 0.0
+        
+        for tier in tiers:
+            threshold = tier.get('threshold', 0)
+            rate = tier.get('rate', 0)
+            max_sales = tier.get('max', float('inf'))
+            
+            if total_sales <= threshold:
+                break
+            
+            sales_in_tier = min(total_sales, max_sales) - threshold
+            if sales_in_tier > 0:
+                commission += sales_in_tier * rate
+        
+        return commission
+    
+    def calculate_molly_commission(self, total_sales: float) -> float:
+        """Calculate Molly's commission (30% or 35% of net sales based on threshold)"""
+        if total_sales <= 0:
+            return 0.0
+        
+        # Net sales = 80% of total
+        net_sales = total_sales * 0.80
+        
+        # Determine rate based on total sales threshold
+        rate = 0.30 if total_sales <= 1500 else 0.35
+        
+        return net_sales * rate
+    
+    def calculate_rebecca_commission(self, total_sales: float, tiers: List[Dict]) -> float:
+        """Calculate Rebecca's NET commission (tiered based on total, applied to net)"""
+        if total_sales <= 0:
+            return 0.0
+        
+        # Determine tier rate based on total sales
+        tier_rate = 0.30
+        for tier in sorted(tiers, key=lambda x: x.get('threshold', 0), reverse=True):
+            if total_sales >= tier.get('threshold', 0):
+                tier_rate = tier.get('rate', 0.30)
+                break
+        
+        # Apply rate to net sales (80% of total)
+        net_sales = total_sales * 0.80
+        return net_sales * tier_rate
+    
+    def calculate_progressive_tiered_commission(self, total_sales: float, tiers: List[Dict]) -> float:
+        """Calculate progressive tiered commission (like tax brackets) - Andreea"""
+        if total_sales <= 0:
+            return 0.0
+        
+        # Sort tiers by threshold
+        sorted_tiers = sorted(tiers, key=lambda x: x.get('threshold', 0))
+        commission = 0.0
+        remaining_sales = total_sales
+        
+        for i, tier in enumerate(sorted_tiers):
+            if remaining_sales <= 0:
+                break
+            
+            threshold = tier.get('threshold', 0)
+            rate = tier.get('rate', 0)
+            
+            # Get next tier threshold
+            next_threshold = sorted_tiers[i + 1].get('threshold', float('inf')) if i + 1 < len(sorted_tiers) else float('inf')
+            
+            # Only calculate if total sales reached this tier
+            if total_sales >= threshold:
+                tier_sales = min(remaining_sales, next_threshold - threshold)
+                if tier_sales > 0:
+                    commission += tier_sales * rate
+                    remaining_sales -= tier_sales
+        
+        return commission
+    
+    def calculate_flat_rate_tiered_commission(self, total_sales: float, tiers: List[Dict]) -> float:
+        """Calculate flat rate tiered commission (entire sale at tier rate) - Nili, Mayu"""
+        if total_sales <= 0:
+            return 0.0
+        
+        # Find the highest tier that applies
+        applicable_tier = tiers[0] if tiers else {}
+        for tier in sorted(tiers, key=lambda x: x.get('threshold', 0), reverse=True):
+            if total_sales >= tier.get('threshold', 0):
+                applicable_tier = tier
+                break
+        
+        rate = applicable_tier.get('rate', 0)
+        return total_sales * rate
+    
+    def calculate_eddie_commission(self, total_sales: float, tiers: List[Dict]) -> float:
+        """Calculate Eddie's commission (tier determined by TOTAL, applied to NET sales)"""
+        if total_sales <= 0:
+            return 0.0
+        
+        # Determine tier rate based on TOTAL sales
+        tier_rate = 0.30
+        for tier in sorted(tiers, key=lambda x: x.get('threshold', 0), reverse=True):
+            if total_sales >= tier.get('threshold', 0):
+                tier_rate = tier.get('rate', 0.30)
+                break
+        
+        # Apply rate to NET sales (80% of total)
+        net_sales = total_sales * 0.80
+        return net_sales * tier_rate
+    
+    def calculate_alex_commission(self, total_sales: float, date: str, employee: Dict) -> float:
+        """Calculate Alex's commission based on date (old vs new structure)"""
+        if total_sales <= 0:
+            return 0.0
+        
+        record_date = datetime.strptime(date, '%Y-%m-%d')
+        old_structure_date = datetime.strptime(employee.get('old_structure', {}).get('effective_date', '2025-11-01'), '%Y-%m-%d')
+        new_structure_date = datetime.strptime(employee.get('new_structure', {}).get('effective_date', '2025-11-04'), '%Y-%m-%d')
+        
+        if record_date < new_structure_date:
+            # Old structure: Flat 27% commission
+            old_structure = employee.get('old_structure', {})
+            commission_rate = old_structure.get('commission_rate', 0.27)
+            return total_sales * commission_rate
+        else:
+            # New structure: Tiered commission
+            new_structure = employee.get('new_structure', {})
+            tiers = new_structure.get('commission_tiers', [])
+            if total_sales > 1500:
+                # Find tier 2 (27% for £1,501+)
+                for tier in tiers:
+                    if tier.get('threshold', 0) == 1500:
+                        return total_sales * tier.get('rate', 0.27)
+            else:
+                # Tier 1 (25% for £0-£1,500)
+                for tier in tiers:
+                    if tier.get('threshold', 0) == 0:
+                        return total_sales * tier.get('rate', 0.25)
+        
+        return 0.0
+    
+    def calculate_daily_payment(self, employee_name: str, hours: float, sales: float, 
+                               addl_sales: float, date: str) -> Dict:
+        """Calculate payment for a single day"""
+        # Try case-insensitive lookup
+        employee = self.employee_config.get(employee_name, {})
+        if not employee:
+            # Try case-insensitive match
+            emp_name_lower = employee_name.lower()
+            for key, value in self.employee_config.items():
+                if key.lower() == emp_name_lower:
+                    employee = value
+                    break
+        
+        # Warn if employee not found in config
+        if not employee:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.warning(f"Employee '{employee_name}' not found in config - using defaults (hourly_only, rate=0)")
+            logger.debug(f"Available employees: {list(self.employee_config.keys())[:10]}...")
+        
+        payment_type = employee.get('payment_type', 'hourly_only')
+        hourly_rate = employee.get('hourly_rate', 0)
+        
+        total_sales = sales + addl_sales
+        
+        result = {
+            'Employee': employee_name,
+            'Date': date,
+            'Hours': hours,
+            'Sales': sales,
+            'AddlSales': addl_sales,
+            'HrlyRate': hourly_rate,
+            'Base': 0.0,
+            'Commission': 0.0,
+            'PaymentType': payment_type
+        }
+        
+        if payment_type == 'hourly_only' or payment_type == 'manager':
+            result['Base'] = hours * hourly_rate
+            result['Commission'] = 0.0
+            result['PaymentType'] = 'HourlyOnly'
+        
+        elif payment_type == 'tiered_commission':
+            # Tuba's case - calculate both hourly and commission
+            hourly_pay = hours * hourly_rate
+            commission = self.calculate_tiered_commission(
+                total_sales, 
+                employee.get('commission_tiers', [])
+            )
+            
+            result['Base'] = hourly_pay
+            result['Commission'] = commission
+            result['PaymentType'] = 'MonthlyMaxLater'
+        
+        elif payment_type == 'molly_commission':
+            # Molly's case - commission only
+            commission = self.calculate_molly_commission(total_sales)
+            result['Base'] = 0.0
+            result['Commission'] = commission
+            result['PaymentType'] = 'MollyCommission'
+        
+        elif payment_type == 'net_commission_tiered':
+            # Rebecca's case - NET commission tiered
+            commission = self.calculate_rebecca_commission(
+                total_sales,
+                employee.get('commission_tiers', [])
+            )
+            result['Base'] = 0.0
+            result['Commission'] = commission
+            result['PaymentType'] = 'NetCommissionTiered'
+        
+        elif payment_type == 'commission_only':
+            # Simple commission only (Codruta, Dave, Isaac, Shany)
+            commission_rate = employee.get('commission_rate', 0)
+            commission = total_sales * commission_rate
+            result['Base'] = 0.0
+            result['Commission'] = commission
+            result['PaymentType'] = 'CommissionOnly'
+        
+        elif payment_type == 'progressive_tiered_commission':
+            # Progressive tiered commission (Andreea)
+            commission = self.calculate_progressive_tiered_commission(
+                total_sales,
+                employee.get('commission_tiers', [])
+            )
+            result['Base'] = 0.0
+            result['Commission'] = commission
+            result['PaymentType'] = 'ProgressiveTieredCommission'
+        
+        elif payment_type == 'hybrid_daily_max':
+            # Hybrid: Calculate both hourly and commission (Roim, Esmaya, Shahar, Bir-ra)
+            hourly_pay = hours * hourly_rate
+            commission = self.calculate_progressive_tiered_commission(
+                total_sales,
+                employee.get('commission_tiers', [])
+            )
+            result['Base'] = hourly_pay
+            result['Commission'] = commission
+            result['PaymentType'] = 'HybridDailyMax'
+        
+        elif payment_type == 'flat_rate_tiered_commission':
+            # Flat rate tiered commission (Nili)
+            commission = self.calculate_flat_rate_tiered_commission(
+                total_sales,
+                employee.get('commission_tiers', [])
+            )
+            result['Base'] = 0.0
+            result['Commission'] = commission
+            result['PaymentType'] = 'FlatRateTieredCommission'
+        
+        elif payment_type == 'flat_rate_tiered_commission_with_transport':
+            # Flat rate tiered with transport (Mayu, Eddie)
+            employee_name_lower = employee_name.lower()
+            
+            if employee_name_lower == 'eddie':
+                # Eddie: Special NET sales calculation
+                commission = self.calculate_eddie_commission(
+                    total_sales,
+                    employee.get('commission_tiers', [])
+                )
+                # Transport is calculated monthly, not daily
+                result['Base'] = 0.0
+            else:
+                # Mayu: Standard flat rate + daily transport
+                commission = self.calculate_flat_rate_tiered_commission(
+                    total_sales,
+                    employee.get('commission_tiers', [])
+                )
+                daily_transport = employee.get('daily_transport', 0)
+                result['Base'] = daily_transport
+            
+            result['Commission'] = commission
+            result['PaymentType'] = 'FlatRateTieredWithTransport'
+        
+        elif payment_type == 'alex_hybrid':
+            # Alex's hybrid structure (date-based)
+            commission = self.calculate_alex_commission(total_sales, date, employee)
+            result['Base'] = 0.0  # Transport and rent calculated monthly
+            result['Commission'] = commission
+            # Determine which structure based on date
+            record_date = datetime.strptime(date, '%Y-%m-%d')
+            new_structure_date = datetime.strptime(employee.get('new_structure', {}).get('effective_date', '2025-11-04'), '%Y-%m-%d')
+            if record_date < new_structure_date:
+                result['PaymentType'] = 'AlexOldStructure'
+            else:
+                result['PaymentType'] = 'AlexNewStructure'
+        
+        return result
+    
+    def calculate_monthly_summary(self, daily_records: List[Dict]) -> Dict:
+        """Calculate monthly summary for an employee"""
+        if not daily_records:
+            return {}
+        
+        employee_name = daily_records[0]['Employee']
+        employee = self.employee_config.get(employee_name, {})
+        bonus_info = self.bonus_config.get(employee_name, {})
+        payment_type = employee.get('payment_type', 'hourly_only')
+        hourly_rate = employee.get('hourly_rate', 0)
+        advance = employee.get('advance', 0)
+        
+        # Calculate totals
+        total_hours = sum(r.get('Hours', 0) for r in daily_records)
+        total_sales = sum(r.get('Sales', 0) for r in daily_records)
+        total_addl_sales = sum(r.get('AddlSales', 0) for r in daily_records)
+        total_commission = sum(r.get('Commission', 0) for r in daily_records)
+        adjusted_sales = total_sales + total_addl_sales
+        
+        # Worked days (days with hours > 0)
+        worked_days = len([r for r in daily_records if r.get('Hours', 0) > 0.001])
+        avg_sales_per_day = total_sales / worked_days if worked_days > 0 else 0
+        
+        # Calculate bonuses
+        total_bonus = sum([
+            bonus_info.get('dailySalesBonus', 0),
+            bonus_info.get('firstLastHourBonus', 0),
+            bonus_info.get('socialMediaBonus', 0),
+            bonus_info.get('managementBonus', 0),
+            bonus_info.get('managementConsistencyBonus', 0),
+            bonus_info.get('transportFuel', 0),
+            bonus_info.get('personalSalesBonus', 0),
+            bonus_info.get('extraBonus', 0),
+            bonus_info.get('dailyAllowance', 0)
+        ])
+        
+        manual_hours = bonus_info.get('manualHours', 0)
+        manual_hours_pay = manual_hours * hourly_rate if hourly_rate > 0 else 0
+        deductions = bonus_info.get('deductions', 0)
+        rent = bonus_info.get('rent', 0)
+        
+        # Calculate final payment based on payment type
+        hours_salary = total_hours * hourly_rate
+        
+        # Initialize variables that may be used in summary
+        monthly_max = 0.0
+        method = None
+        
+        if payment_type == 'molly_commission':
+            # Molly: Commission + manual hours + bonus - deductions - rent
+            base_payment = total_commission + manual_hours_pay + total_bonus
+            final_payment = base_payment - deductions - rent - advance
+        
+        elif payment_type == 'tiered_commission':
+            # Tuba: Monthly max of Hourly vs Commission + bonus + manual hours - deductions - rent
+            monthly_max = max(hours_salary, total_commission)
+            base_payment = monthly_max + total_bonus + manual_hours_pay
+            final_payment = base_payment - deductions - rent - advance
+            method = 'Hourly' if monthly_max == hours_salary else 'Commission'
+        
+        elif payment_type == 'net_commission_tiered':
+            # Rebecca: Commission + manual hours + bonus - deductions
+            base_payment = total_commission + manual_hours_pay + total_bonus
+            final_payment = base_payment - deductions - advance
+        
+        elif payment_type == 'commission_only':
+            # Commission only: Commission + bonus + manual hours - deductions - rent
+            base_payment = total_commission + total_bonus + manual_hours_pay
+            final_payment = base_payment - deductions - rent - advance
+        
+        elif payment_type == 'progressive_tiered_commission':
+            # Progressive tiered: Commission + bonus + manual hours - deductions - rent
+            base_payment = total_commission + total_bonus + manual_hours_pay
+            final_payment = base_payment - deductions - rent - advance
+        
+        elif payment_type == 'hybrid_daily_max':
+            # Hybrid daily max: Monthly max of Hourly vs Commission + bonus + manual hours - deductions - rent
+            monthly_max = max(hours_salary, total_commission)
+            base_payment = monthly_max + total_bonus + manual_hours_pay
+            final_payment = base_payment - deductions - rent - advance
+            method = 'Hourly' if monthly_max == hours_salary else 'Commission'
+        
+        elif payment_type == 'flat_rate_tiered_commission':
+            # Flat rate tiered: Commission + bonus + manual hours - deductions - rent
+            base_payment = total_commission + total_bonus + manual_hours_pay
+            final_payment = base_payment - deductions - rent - advance
+        
+        elif payment_type == 'flat_rate_tiered_commission_with_transport':
+            # Flat rate with transport: Commission + transport + bonus + manual hours - deductions - rent
+            employee_name_lower = employee_name.lower()
+            if employee_name_lower == 'eddie':
+                # Eddie: Commission + transport (calculated monthly) + sales bonus + bonus + manual hours - deductions
+                # Transport is calculated as daily_transport * worked_days
+                daily_transport = employee.get('daily_transport', 0)
+                transport_total = daily_transport * worked_days
+                
+                # Calculate Eddie's sales bonus based on month
+                record_date = datetime.strptime(daily_records[0]['Date'], '%Y-%m-%d')
+                month_name = record_date.strftime('%B').lower()
+                
+                sales_bonus = 0.0
+                if month_name == 'november':
+                    bonuses = employee.get('november_bonuses', [])
+                    for bonus_tier in sorted(bonuses, key=lambda x: x.get('sales_threshold', 0), reverse=True):
+                        if adjusted_sales >= bonus_tier.get('sales_threshold', 0):
+                            sales_bonus = bonus_tier.get('bonus_amount', 0)
+                            break
+                elif month_name == 'december':
+                    bonuses = employee.get('december_bonuses', [])
+                    for bonus_tier in sorted(bonuses, key=lambda x: x.get('sales_threshold', 0), reverse=True):
+                        if adjusted_sales >= bonus_tier.get('sales_threshold', 0):
+                            sales_bonus = bonus_tier.get('bonus_amount', 0)
+                            break
+                
+                base_payment = total_commission + transport_total + sales_bonus + total_bonus + manual_hours_pay
+                final_payment = base_payment - deductions - advance
+            else:
+                # Mayu: Commission + transport + bonus + manual hours - deductions - rent
+                daily_transport = employee.get('daily_transport', 0)
+                transport_total = daily_transport * worked_days
+                base_payment = total_commission + transport_total + total_bonus + manual_hours_pay
+                final_payment = base_payment - deductions - rent - advance
+        
+        elif payment_type == 'alex_hybrid':
+            # Alex: Transport + Commission + Base (rent) + bonus + manual hours - deductions
+            transport = employee.get('transport', 0)
+            
+            # Check if any days use new structure
+            new_structure_date = datetime.strptime(employee.get('new_structure', {}).get('effective_date', '2025-11-04'), '%Y-%m-%d')
+            has_new_structure = any(
+                datetime.strptime(r['Date'], '%Y-%m-%d') >= new_structure_date 
+                for r in daily_records
+            )
+            
+            rent_amount = 0.0
+            if has_new_structure:
+                # Calculate rent based on total sales
+                rent_tiers = employee.get('new_structure', {}).get('rent_tiers', [])
+                for rent_tier in sorted(rent_tiers, key=lambda x: x.get('sales_threshold', 0), reverse=True):
+                    if adjusted_sales >= rent_tier.get('sales_threshold', 0):
+                        rent_amount = rent_tier.get('rent_amount', 0)
+                        break
+            
+            base_payment = transport + total_commission + rent_amount + total_bonus + manual_hours_pay
+            final_payment = base_payment - deductions - advance
+        
+        else:
+            # All other staff: Hourly + Bonus + Manual Hours - Deductions - Rent
+            base_payment = hours_salary + total_bonus + manual_hours_pay
+            final_payment = base_payment - deductions - rent - advance
+        
+        # Individual bonus breakdown for detailed view
+        bonus_breakdown = {
+            'DailySalesBonus': bonus_info.get('dailySalesBonus', 0),
+            'FirstLastHourBonus': bonus_info.get('firstLastHourBonus', 0),
+            'SocialMediaBonus': bonus_info.get('socialMediaBonus', 0),
+            'ManagementBonus': bonus_info.get('managementBonus', 0),
+            'ManagementConsistencyBonus': bonus_info.get('managementConsistencyBonus', 0),
+            'TransportFuel': bonus_info.get('transportFuel', 0),
+            'PersonalSalesBonus': bonus_info.get('personalSalesBonus', 0),
+            'ExtraBonus': bonus_info.get('extraBonus', 0),
+            'DailyAllowance': bonus_info.get('dailyAllowance', 0)
+        }
+        
+        summary = {
+            'Employee': employee_name,
+            'WorkedDays': worked_days,
+            'WorkedHours': round(total_hours, 2),
+            'Sales': round(total_sales, 2),
+            'AddlSales': round(total_addl_sales, 2),
+            'AdjustedSales': round(adjusted_sales, 2),
+            'AvgSalePerDay': round(avg_sales_per_day, 2),
+            'RatePerHour': hourly_rate,
+            'HoursSalary': round(hours_salary, 2),
+            'TotalCommission': round(total_commission, 2),
+            'TotalBonus': round(total_bonus, 2),
+            'ManualHours': manual_hours,
+            'ManualHoursPay': round(manual_hours_pay, 2),
+            'Deductions': deductions,
+            'Rent': rent,
+            'Advance': advance,
+            'FinalPayment': round(final_payment, 2),
+            'PaymentType': payment_type,
+            'BonusBreakdown': bonus_breakdown  # Include detailed bonus breakdown
+        }
+        
+        if payment_type == 'tiered_commission':
+            summary['MonthlyMaxMethod'] = method
+            summary['MonthlyMaxAmount'] = round(monthly_max, 2)
+        
+        if payment_type == 'hybrid_daily_max':
+            summary['MonthlyMaxMethod'] = method
+            summary['MonthlyMaxAmount'] = round(monthly_max, 2)
+        
+        return summary

@@ -1,0 +1,21 @@
+shops:
+  pyt:
+    name: "PYT Hairstyle"
+    google_drive_folder_id: ""  # Set your Google Drive folder ID
+    airtable_base_id: "appU7I7OQ33ek5ymf"  # Set your Airtable base ID
+    airtable_table_name: "PYT Daily Breakdowns"
+    employee_config: "config/employees_pyt.yaml"
+    
+  opatra:
+    name: "Opatra"
+    google_drive_folder_id: ""  # Set your Google Drive folder ID
+    airtable_base_id: "appU7I7OQ33ek5ymf"  # Set your Airtable base ID
+    airtable_table_name: "Opatra Daily Breakdowns"
+    employee_config: "config/employees_opatra.yaml"
+    
+  silverburn:
+    name: "Silverburn"
+    google_drive_folder_id: ""  # Set your Google Drive folder ID
+    airtable_base_id: "appU7I7OQ33ek5ymf"  # Set your Airtable base ID
+    airtable_table_name: "Silverburn Daily Breakdowns"
+    employee_config: "config/employees_silverburn.yaml"

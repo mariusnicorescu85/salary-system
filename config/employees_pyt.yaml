@@ -1,0 +1,355 @@
+# PYT Employee Configuration
+# Payment types: hourly_only, tiered_commission, molly_commission, manager
+
+# Name mapping: Maps names from reports to normalized employee names
+name_mapping:
+  "aleeza waseem": "Aleeza"
+  "codruta nicorescu": "Codruta"
+  "eiman eiman": "Eiman"
+  "eshaal awan": "Eshaal"
+  "fatima zulficar": "Fatima"
+  "hasseb alina": "Alina"
+  "hasseb": "Alina"
+  "jude elsidiq": "Jude"
+  "katelyn harnett": "Katelyn"
+  "katie katie": "Katie"
+  "lee adam": "Adam"
+  "lee": "Adam"
+  "makeel rimsha": "Rimsha"
+  "makeel": "Rimsha"
+  "maleeha ali": "Maleeha"
+  "misha misha": "Misha"
+  "talya talya": "Talya"
+  "temitope t": "Temitope"
+  "tuba raja": "Tuba"
+  "zoya julani": "Zoya"
+  "Nadeem": "Monica"
+  "salami": "Bucola"
+  "Kassam": "Anah"
+  "Silva": "Cesaltina"
+  "Lucy": "Lucy"
+  "Memfy": "Gia"
+  "Molly": "Molly"
+  "Oboh": "Trena"
+  "B": "Billie"
+
+# Patterns to exclude (case-insensitive)
+exclude_patterns:
+  - "test"
+  - "TEST"
+  - "admin"
+  - "ADMIN"
+  - "manager"
+  - "MANAGER"
+  - "demo"
+  - "DEMO"
+  - "example"
+  - "EXAMPLE"
+  - "temp"
+  - "TEMP"
+
+employees:
+  # Senior Stylists
+  Alina:
+    payment_type: hourly_only
+    hourly_rate: 12.50
+    email: "alinajunaidj@gmail.com"
+    
+  Rimsha:
+    payment_type: hourly_only
+    hourly_rate: 12.21
+    email: "codruta.maris@hotmail.com"
+    
+  Temitope:
+    payment_type: hourly_only
+    hourly_rate: 12.21
+    email: "temitopeoguns15@gmail.com"
+    
+  Zoya:
+    payment_type: hourly_only
+    hourly_rate: 12.71
+    email: "zoyaasim291704@gmail.com"
+    
+  # Standard Stylists
+  Fatima:
+    payment_type: hourly_only
+    hourly_rate: 10.50
+    email: "Fatimazulficar786@gmail.com"
+    
+  Jude:
+    payment_type: hourly_only
+    hourly_rate: 10.00
+    email: "jude.omer.elmahdi@gmail.com"
+    
+  Katelyn:
+    payment_type: hourly_only
+    hourly_rate: 10.00
+    email: "katelynharnett1@hotmail.com"
+    
+  Talya:
+    payment_type: hourly_only
+    hourly_rate: 10.00
+    email: "talyaxelmahdi@gmail.com"
+    
+  Lucy:
+    payment_type: hourly_only
+    hourly_rate: 12.21
+    email: "Lucy.lancaster4045@gmail.com"
+    advance: 200
+    
+  Cesaltina:
+    payment_type: hourly_only
+    hourly_rate: 10.00
+    email: "silvacesaltina2@gmail.com"
+    
+  Katie:
+    payment_type: hourly_only
+    hourly_rate: 10.00
+    email: "codruta.maris@hotmail.com"
+    
+  Aleeza:
+    payment_type: hourly_only
+    hourly_rate: 10.00
+    email: "aleezawaseem75@gmail.com"
+    
+  Anah:
+    payment_type: hourly_only
+    hourly_rate: 10.00
+    email: "codruta.maris@hotmail.com"
+    
+  Gia:
+    payment_type: hourly_only
+    hourly_rate: 10.00
+    email: "giabella@memfy.uk.com"
+    
+  Trena:
+    payment_type: hourly_only
+    hourly_rate: 12.21
+    email: "toriatfashion.ie@gmail.com"
+    
+  Billie:
+    payment_type: hourly_only
+    hourly_rate: 7.55
+    email: "billie.g2009@hotmail.com"
+    
+  # Junior Stylists
+  Eiman:
+    payment_type: hourly_only
+    hourly_rate: 7.55
+    email: "codruta.maris@hotmail.com"
+    
+  Eshaal:
+    payment_type: hourly_only
+    hourly_rate: 7.55
+    email: "eshaal.awan@hotmail.com"
+    
+  Monica:
+    payment_type: hourly_only
+    hourly_rate: 7.55
+    email: "monica.nadeem@icloud.com"
+    
+  Misha:
+    payment_type: hourly_only
+    hourly_rate: 7.55
+    email: "misha2u@icloud.com"
+    
+  # Managers
+  Codruta:
+    payment_type: manager
+    hourly_rate: 0
+    email: "codruta.maris@hotmail.com"
+    
+  Adam:
+    payment_type: manager
+    hourly_rate: 0
+    email: "codruta.maris@hotmail.com"
+    
+  # Special Cases
+  Tuba:
+    payment_type: tiered_commission
+    hourly_rate: 12.21
+    commission_tiers:
+      - threshold: 0
+        rate: 0.22
+        max: 600
+      - threshold: 600
+        rate: 0.24
+        max: 1000
+      - threshold: 1000
+        rate: 0.25
+        max: 1600
+      - threshold: 1600
+        rate: 0.26
+        max: null
+    email: "tubaraja7@outlook.com"
+    
+  Molly:
+    payment_type: molly_commission
+    hourly_rate: 0
+    commission_tiers:
+      - threshold: 0
+        rate: 0.30
+        net_sales_percentage: 0.80
+      - threshold: 1500
+        rate: 0.35
+        net_sales_percentage: 0.80
+    email: "Mollytasheva@gmail.com"
+    rent: 878.5
+
+# Bonus configurations (monthly totals)
+bonuses:
+  Tuba:
+    dailySalesBonus: 0
+    firstLastHourBonus: 30
+    socialMediaBonus: 0
+    managementBonus: 431.11
+    managementConsistencyBonus: 0
+    transportFuel: 216
+    personalSalesBonus: 0
+    extraBonus: 0
+    manualHours: 0
+    deductions: 0
+    rent: 0
+    
+  Eshaal:
+    dailySalesBonus: 120
+    firstLastHourBonus: 0
+    socialMediaBonus: 0
+    managementBonus: 0
+    managementConsistencyBonus: 0
+    transportFuel: 0
+    personalSalesBonus: 0
+    extraBonus: 0
+    manualHours: 0
+    deductions: 0
+    rent: 0
+    
+  Jude:
+    dailySalesBonus: 50
+    firstLastHourBonus: 20
+    socialMediaBonus: 0
+    managementBonus: 0
+    managementConsistencyBonus: 0
+    transportFuel: 0
+    personalSalesBonus: 0
+    extraBonus: 0
+    manualHours: 0
+    deductions: 0
+    rent: 0
+    
+  Misha:
+    dailySalesBonus: 350
+    firstLastHourBonus: 65
+    socialMediaBonus: 0
+    managementBonus: 0
+    managementConsistencyBonus: 0
+    transportFuel: 0
+    personalSalesBonus: 0
+    extraBonus: 0
+    manualHours: 0
+    deductions: 0
+    rent: 0
+    
+  Talya:
+    dailySalesBonus: 155
+    firstLastHourBonus: 35
+    socialMediaBonus: 0
+    managementBonus: 0
+    managementConsistencyBonus: 0
+    transportFuel: 0
+    personalSalesBonus: 0
+    extraBonus: 0
+    manualHours: 0
+    deductions: 0
+    rent: 0
+    
+  Temitope:
+    dailySalesBonus: 250
+    firstLastHourBonus: 25
+    socialMediaBonus: 0
+    managementBonus: 0
+    managementConsistencyBonus: 0
+    transportFuel: 0
+    personalSalesBonus: 0
+    extraBonus: 0
+    manualHours: 0
+    deductions: 0
+    rent: 0
+    
+  Zoya:
+    dailySalesBonus: 445
+    firstLastHourBonus: 40
+    socialMediaBonus: 50
+    managementBonus: 0
+    managementConsistencyBonus: 0
+    transportFuel: 0
+    personalSalesBonus: 0
+    extraBonus: 0
+    manualHours: 0
+    deductions: 0
+    rent: 0
+    
+  Fatima:
+    dailySalesBonus: 335
+    firstLastHourBonus: 45
+    socialMediaBonus: 0
+    managementBonus: 0
+    managementConsistencyBonus: 0
+    transportFuel: 0
+    personalSalesBonus: 0
+    extraBonus: 0
+    manualHours: 0
+    deductions: 0
+    rent: 0
+    
+  Monica:
+    dailySalesBonus: 290
+    firstLastHourBonus: 65
+    socialMediaBonus: 0
+    managementBonus: 0
+    managementConsistencyBonus: 0
+    transportFuel: 0
+    personalSalesBonus: 0
+    extraBonus: 0
+    manualHours: 0
+    deductions: 0
+    rent: 0
+    
+  Lucy:
+    dailySalesBonus: 95
+    firstLastHourBonus: 25
+    socialMediaBonus: 0
+    managementBonus: 0
+    managementConsistencyBonus: 0
+    transportFuel: 0
+    personalSalesBonus: 0
+    extraBonus: 0
+    manualHours: 0
+    deductions: 0
+    rent: 0
+    
+  Aleeza:
+    dailySalesBonus: 75
+    firstLastHourBonus: 5
+    socialMediaBonus: 0
+    managementBonus: 0
+    managementConsistencyBonus: 0
+    transportFuel: 0
+    personalSalesBonus: 0
+    extraBonus: 0
+    manualHours: 0
+    deductions: 0
+    rent: 0
+    
+  Gia:
+    dailySalesBonus: 15
+    firstLastHourBonus: 0
+    socialMediaBonus: 0
+    managementBonus: 0
+    managementConsistencyBonus: 0
+    transportFuel: 0
+    personalSalesBonus: 0
+    extraBonus: 0
+    manualHours: 0
+    deductions: 0
+    rent: 0
