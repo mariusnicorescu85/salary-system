@@ -52,7 +52,27 @@ Thumbs.db
 # Logs
 *.log
 
-# Data files (optional - uncomment if you don't want to track data)
-# *.csv
-# *.xlsx
-# *.xls
+# Data files (test data, not needed for deployment)
+*.csv
+*.xlsx
+*.xls
+report.csv
+
+# Documentation files (keep only essential ones)
+# Keep: README.md, DEPLOY_STREAMLIT_CLOUD.md
+AIRTABLE_DATA_RETRIEVAL.md
+AIRTABLE_SETUP.md
+EMAIL_AND_AIRTABLE_SETUP.md
+EMAIL_BREAKDOWN_PREVIEW.md
+LOCAL_TESTING.md
+MONTHLY_ADJUSTMENTS_GUIDE.md
+QUICKSTART.md
+UPDATES.md
+VERCEL_WARNING.md
+DEPLOYMENT.md
+DEPLOYMENT_CHECKLIST.md
+
+# Deployment files not used by Streamlit Cloud
+Dockerfile
+Procfile
+runtime.txt
