@@ -58,6 +58,8 @@ if 'target_total_reached' not in st.session_state:
     st.session_state.target_total_reached = 0.0
 if 'target_current_date' not in st.session_state:
     st.session_state.target_current_date = datetime.today().date()
+if 'daily_target_date' not in st.session_state:
+    st.session_state.daily_target_date = datetime.today().date()
 
 
 @st.cache_data
@@ -138,6 +140,39 @@ def load_shop_targets() -> Dict:
 def save_shop_targets(targets: Dict):
     """Persist monthly sales targets per shop."""
     path = Path("config/shop_targets.yaml")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w") as f:
+        yaml.dump(targets, f, default_flow_style=False, sort_keys=False)
+
+
+def load_daily_targets() -> Dict:
+    """Load saved daily targets per shop. Per date: { staff_working: [...], staff_daily_targets: { name: float } }."""
+    path = Path("config/daily_targets.yaml")
+    if not path.exists():
+        return {}
+    with open(path, "r") as f:
+        raw = yaml.safe_load(f) or {}
+    out = {}
+    for shop_key, dates in raw.items():
+        out[shop_key] = {}
+        for date_str, val in (dates or {}).items():
+            if isinstance(val, dict):
+                staff_targets = val.get("staff_daily_targets")
+                if not isinstance(staff_targets, dict):
+                    staff_targets = {}
+                # Legacy: single daily_target stored as shop total; keep staff_daily_targets only
+                out[shop_key][date_str] = {
+                    "staff_working": val.get("staff_working") or [],
+                    "staff_daily_targets": {k: float(v) for k, v in staff_targets.items()},
+                }
+            else:
+                out[shop_key][date_str] = {"staff_working": [], "staff_daily_targets": {}}
+    return out
+
+
+def save_daily_targets(targets: Dict):
+    """Persist daily targets per shop (staff_working + staff_daily_targets per date)."""
+    path = Path("config/daily_targets.yaml")
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w") as f:
         yaml.dump(targets, f, default_flow_style=False, sort_keys=False)
@@ -1670,6 +1705,87 @@ Table Name: {repr(table_name)} (type: {type(table_name).__name__})
                 - 🟢 **Above target**: You are more than 10% ahead of expected sales (Direction vs target &gt; 110%).
                 """
             )
+
+        # --- Daily target rubric: manager sets who is working and per-staff daily target per day ---
+        st.markdown("---")
+        st.subheader("📋 Daily target (manager)")
+        st.caption("Set who is working each day and each staff member’s individual sales target for that day.")
+        shop_key_tracker = st.session_state.get("selected_shop", list(load_config().get("shops", {}).keys())[0])
+        employees_tracker, _, _ = load_employee_config(shop_key_tracker)
+        employee_names = list(employees_tracker.keys()) if employees_tracker else []
+
+        daily_targets_config = load_daily_targets()
+        shop_daily = daily_targets_config.get(shop_key_tracker, {})
+
+        # Date and staff selection OUTSIDE the form so they update immediately and per-staff inputs appear
+        rubric_date = st.date_input(
+            "Date",
+            value=st.session_state.get("daily_target_date", datetime.today().date()),
+            key="daily_target_date",
+            help="The day you are setting the target for.",
+        )
+        date_str = rubric_date.strftime("%Y-%m-%d")
+        existing = shop_daily.get(date_str, {"staff_working": [], "staff_daily_targets": {}})
+        existing_staff = existing.get("staff_working") or []
+        existing_targets = existing.get("staff_daily_targets") or {}
+
+        staff_working = st.multiselect(
+            "Staff working this day",
+            options=employee_names,
+            default=existing_staff,
+            key="daily_rubric_staff",
+            help="Select everyone who is working on this date. Individual target fields appear below.",
+        )
+
+        st.markdown("**Daily target per staff (£)**")
+        with st.form("daily_target_rubric_form", clear_on_submit=False):
+            staff_daily_targets = {}
+            num_cols = min(3, max(1, len(staff_working)))
+            cols = st.columns(num_cols)
+            for i, name in enumerate(staff_working):
+                with cols[i % num_cols]:
+                    staff_daily_targets[name] = st.number_input(
+                        f"{name}",
+                        min_value=0.0,
+                        step=50.0,
+                        value=float(existing_targets.get(name, 0)),
+                        format="%.2f",
+                        key=f"daily_target_{date_str}_{name}",
+                        help=f"Sales target for {name} on this day.",
+                    )
+            submitted_rubric = st.form_submit_button("Save daily target")
+
+        if submitted_rubric:
+            staff_working_submitted = staff_working  # current selection (outside form)
+            staff_daily_targets_submitted = {}
+            for name in staff_working_submitted:
+                key = f"daily_target_{date_str}_{name}"
+                staff_daily_targets_submitted[name] = float(st.session_state.get(key, 0))
+            if shop_key_tracker not in daily_targets_config:
+                daily_targets_config[shop_key_tracker] = {}
+            daily_targets_config[shop_key_tracker][date_str] = {
+                "staff_working": staff_working_submitted,
+                "staff_daily_targets": staff_daily_targets_submitted,
+            }
+            save_daily_targets(daily_targets_config)
+            total = sum(staff_daily_targets_submitted.values())
+            st.success(f"Saved for {date_str}: {len(staff_working_submitted)} staff, total target £{total:,.2f}")
+            st.rerun()
+
+        # Show today's manager-set daily targets (per staff and total)
+        today_str = datetime.today().date().strftime("%Y-%m-%d")
+        today_rubric = shop_daily.get(today_str, {})
+        today_staff = today_rubric.get("staff_working") or []
+        today_targets = today_rubric.get("staff_daily_targets") or {}
+        if today_staff or today_targets:
+            with st.expander("Today’s daily target (manager)", expanded=True):
+                if today_targets:
+                    for name, target in today_targets.items():
+                        if target > 0:
+                            st.write(f"**{name}:** {format_currency(target)}")
+                    st.metric("Total daily target", format_currency(sum(today_targets.values())))
+                if today_staff and not today_targets:
+                    st.write("**Staff working:**", ", ".join(today_staff))
 
         # Use a form so that pressing Enter submits ONLY this section
         with st.form("sales_target_tracker_form", clear_on_submit=False):
