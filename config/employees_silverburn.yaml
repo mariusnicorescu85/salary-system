@@ -54,6 +54,10 @@ name_mapping:
   "kassam anah": "Anah"
   "silva cesaltina": "Cesaltina"
   "mariam": "Mariam"
+  "Smith Isabella": "Isabella"
+  "Zainab Duaa": "Duaa"
+  "smith isabella": "Isabella"
+  "zainab duaa": "Duaa"
 
 # Patterns to exclude (case-insensitive)
 exclude_patterns:
@@ -207,6 +211,16 @@ employees:
     payment_type: hourly_only
     hourly_rate: 7.55
     email: "Imogenkennedy748@gmail.com"
+
+  Isabella:
+    payment_type: hourly_only
+    hourly_rate: 10
+    email: "isabellasmith202367@gmail.com"
+
+  Duaa:
+    payment_type: hourly_only
+    hourly_rate: 12.71
+    email: "duaazainab01@gmail.com"        
     
   # Managers
   Codruta:

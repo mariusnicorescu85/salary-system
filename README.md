@@ -20,7 +20,40 @@ A comprehensive dashboard system for calculating employee salaries across multip
    pip install -r requirements.txt
    ```
 
-3. **Set up Google Drive API credentials**:
+3. **Set up authentication** (REQUIRED):
+   - The dashboard is protected with username/password authentication
+   - **For multiple users** (recommended):
+     ```bash
+     python setup_users.py
+     ```
+     - This interactive script helps you add multiple users
+     - It generates password hashes and creates the complete configuration
+     - Copy the output to `.streamlit/secrets.toml`
+   - **For a single user**:
+     ```bash
+     python setup_auth.py
+     ```
+   - **Manual setup**: Add credentials to `.streamlit/secrets.toml`:
+     ```toml
+     [credentials]
+     usernames = { 
+         "admin" = { "name" = "Administrator", "password" = "$2b$12$..." },
+         "user1" = { "name" = "John Doe", "password" = "$2b$12$..." },
+         "user2" = { "name" = "Jane Smith", "password" = "$2b$12$..." }
+     }
+     cookie_name = "salary_calc_cookie"
+     cookie_key = "your-secret-cookie-key-change-this-in-production"
+     cookie_expiry_days = 30
+     ```
+   - **Important**: 
+     - You can add as many users as needed in the `usernames` dictionary
+     - Each user needs a unique username and password hash
+     - Generate a strong random string for `cookie_key`
+     - Never commit `secrets.toml` to git (it should be in `.gitignore`)
+   - **Alternative**: Set environment variables `ADMIN_USERNAME` and `ADMIN_PASSWORD` (less secure, single user only)
+   - **📖 See `USER_MANAGEMENT.md` for detailed instructions on adding/removing users**
+
+4. **Set up Google Drive API credentials**:
    - Go to [Google Cloud Console](https://console.cloud.google.com/)
    - Create a new project or select an existing one
    - Enable the Google Drive API
@@ -28,11 +61,11 @@ A comprehensive dashboard system for calculating employee salaries across multip
    - Download the credentials JSON file
    - Save it as `credentials/google_drive_credentials.json`
 
-4. **Configure Airtable** (optional):
+5. **Configure Airtable** (optional):
    - Get your Airtable API key from [Airtable Account](https://airtable.com/account)
    - Set it as an environment variable or enter it in the dashboard
 
-5. **Configure shops and employees**:
+6. **Configure shops and employees**:
    - Edit `config/shops.yaml` to set Google Drive folder IDs and Airtable base IDs
    - Edit `config/employees_pyt.yaml`, `config/employees_silverburn.yaml`, and `config/employees_opatra.yaml` to configure employee payment conditions
 
@@ -45,6 +78,7 @@ A comprehensive dashboard system for calculating employee salaries across multip
 
 2. **Access the dashboard**:
    - Open your browser to `http://localhost:8501`
+   - **Login required**: Enter your username and password
 
 3. **Run calculations**:
    - Select a shop from the sidebar

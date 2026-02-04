@@ -13,6 +13,9 @@ import io
 import logging
 import sys
 import os
+import hashlib
+import secrets
+import calendar
 
 # Set up console logging
 logging.basicConfig(
@@ -27,8 +30,8 @@ logger = logging.getLogger(__name__)
 # Import our modules
 from src.calculation_engine import CalculationEngine
 from src.data_processor import DataProcessor
-from src.google_drive_client import GoogleDriveClient
 from src.airtable_client import AirtableClient
+from src.email_client import EmailClient
 
 
 # Page configuration
@@ -43,6 +46,18 @@ if 'calculations_done' not in st.session_state:
     st.session_state.calculations_done = False
 if 'results' not in st.session_state:
     st.session_state.results = {}
+if 'authentication_status' not in st.session_state:
+    st.session_state.authentication_status = None
+if 'name' not in st.session_state:
+    st.session_state.name = None
+if 'username' not in st.session_state:
+    st.session_state.username = None
+if 'target_approved' not in st.session_state:
+    st.session_state.target_approved = 0.0
+if 'target_total_reached' not in st.session_state:
+    st.session_state.target_total_reached = 0.0
+if 'target_current_date' not in st.session_state:
+    st.session_state.target_current_date = datetime.today().date()
 
 
 @st.cache_data
@@ -110,7 +125,215 @@ def save_monthly_adjustments(shop_key: str, year: int, month: int, adjustments: 
         yaml.dump(adjustments, f, default_flow_style=False, sort_keys=False)
 
 
+@st.cache_data
+def load_shop_targets() -> Dict:
+    """Load saved monthly sales targets per shop."""
+    path = Path("config/shop_targets.yaml")
+    if not path.exists():
+        return {}
+    with open(path, "r") as f:
+        return yaml.safe_load(f) or {}
+
+
+def save_shop_targets(targets: Dict):
+    """Persist monthly sales targets per shop."""
+    path = Path("config/shop_targets.yaml")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w") as f:
+        yaml.dump(targets, f, default_flow_style=False, sort_keys=False)
+
+
+def get_email_client_for_shop(shop_key: str) -> EmailClient:
+    """
+    Create an EmailClient using per-shop SMTP credentials when available.
+    
+    Expected Streamlit secrets layout (examples):
+    
+    ```toml
+    [email_pyt]
+    SMTP_USER = "pythairstyleco@gmail.com"
+    SMTP_PASSWORD = "app_password_for_pyt"
+    
+    [email_silverburn]
+    SMTP_USER = "pythairstyleco@gmail.com"
+    SMTP_PASSWORD = "app_password_for_pyt"
+    
+    [email_opatra]
+    SMTP_USER = "invoices.opulent@gmail.com"
+    SMTP_PASSWORD = "app_password_for_opatra"
+    ```
+    
+    If a section for the given shop key (e.g. `email_pyt`, `email_silverburn`,
+    `email_opatra`) is not found, falls back to global SMTP_* env vars.
+    """
+    smtp_user = None
+    smtp_password = None
+    
+    # Try per-shop Streamlit secrets: [email_pyt], [email_silverburn], [email_opatra], etc.
+    try:
+        if hasattr(st, "secrets"):
+            section_name = f"email_{shop_key}"
+            if section_name in st.secrets:
+                sect = st.secrets[section_name]
+                # Support either upper- or lower-case keys
+                smtp_user = sect.get("SMTP_USER") or sect.get("smtp_user")
+                smtp_password = sect.get("SMTP_PASSWORD") or sect.get("smtp_password")
+    except Exception:
+        # If anything goes wrong with reading secrets, we just fall back to defaults
+        smtp_user = None
+        smtp_password = None
+    
+    if smtp_user and smtp_password:
+        return EmailClient(smtp_user=smtp_user, smtp_password=smtp_password)
+    
+    # Fall back to global env-based configuration
+    return EmailClient()
+
+
+def hash_password(password: str, salt: str = None) -> tuple:
+    """Hash a password using SHA-256 with salt. Returns (hash, salt)"""
+    if salt is None:
+        salt = secrets.token_hex(16)
+    password_bytes = password.encode('utf-8')
+    salt_bytes = salt.encode('utf-8')
+    hash_obj = hashlib.sha256(salt_bytes + password_bytes)
+    return hash_obj.hexdigest(), salt
+
+
+def verify_password(password: str, stored_hash: str, salt: str = None) -> bool:
+    """Verify a password against a stored hash"""
+    try:
+        # If stored_hash contains salt (format: "hash:salt"), split it
+        if ':' in stored_hash:
+            stored_hash, salt = stored_hash.split(':', 1)
+        
+        if salt is None:
+            # Try to extract salt from stored_hash if it's in a different format
+            # For backward compatibility, if no salt, use empty salt
+            salt = ''
+        
+        # Hash the provided password with the salt
+        computed_hash, _ = hash_password(password, salt)
+        return computed_hash == stored_hash
+    except Exception as e:
+        logger.error(f"Password verification error: {e}")
+        return False
+
+
+def setup_authentication():
+    """
+    Set up and handle user authentication.
+    Returns True if user is authenticated, False otherwise.
+    """
+    # Check if already authenticated in this session
+    if st.session_state.get('authentication_status') == True:
+        # Show logout button
+        with st.sidebar:
+            st.markdown("---")
+            if st.button("🚪 Logout", use_container_width=True):
+                st.session_state.authentication_status = None
+                st.session_state.name = None
+                st.session_state.username = None
+                st.rerun()
+        return True
+    
+    # Try to get credentials from Streamlit secrets
+    try:
+        if hasattr(st, 'secrets') and 'credentials' in st.secrets:
+            credentials = st.secrets['credentials']
+            usernames = credentials.get('usernames', {})
+        else:
+            # Fallback: use environment variables or default credentials
+            logger.warning("No credentials found in secrets. Using default/fallback authentication.")
+            default_username = os.getenv('ADMIN_USERNAME', 'admin')
+            default_password = os.getenv('ADMIN_PASSWORD', '')
+            
+            if not default_password:
+                st.error("⚠️ **Authentication not configured!**")
+                st.info("""
+                Please configure authentication by adding credentials to `.streamlit/secrets.toml`:
+                
+                ```toml
+                [credentials]
+                usernames = { "admin" = { "name" = "Administrator", "password" = "$2b$12$..." } }
+                ```
+                
+                Or set environment variables:
+                - `ADMIN_USERNAME` (default: 'admin')
+                - `ADMIN_PASSWORD` (hashed password)
+                
+                To generate a password hash, run:
+                ```python
+                python setup_auth.py
+                ```
+                Or manually:
+                ```python
+                import hashlib, secrets
+                password = "your_password"
+                salt = secrets.token_hex(16)
+                hash_obj = hashlib.sha256(salt.encode() + password.encode())
+                print(f"{hash_obj.hexdigest()}:{salt}")
+                ```
+                """)
+                return False
+            
+            # Create credentials dict from environment variables
+            # Check if password is already hashed (format: "hash:salt" or just "hash")
+            if ':' in default_password or len(default_password) == 64:
+                # Password is already hashed, use as-is
+                hashed_password = default_password
+            else:
+                # Password is plain text, hash it (for development convenience only)
+                logger.warning("Using plain text password from environment - this is less secure. Use a hashed password in production.")
+                hashed_password, salt = hash_password(default_password)
+                hashed_password = f"{hashed_password}:{salt}"
+            
+            usernames = {
+                default_username: {
+                    'name': 'Administrator',
+                    'password': hashed_password
+                }
+            }
+    except Exception as e:
+        logger.error(f"Error loading authentication credentials: {e}")
+        st.error(f"❌ Error loading authentication: {str(e)}")
+        return False
+    
+    # Show login form
+    st.title("🔐 Login Required")
+    st.markdown("Please enter your credentials to access the Salary Calculation Dashboard")
+    
+    with st.form("login_form"):
+        username = st.text_input("Username", key="login_username")
+        password = st.text_input("Password", type="password", key="login_password")
+        submitted = st.form_submit_button("Login", type="primary", use_container_width=True)
+        
+        if submitted:
+            if username in usernames:
+                user_data = usernames[username]
+                stored_hash = user_data['password']
+                
+                # Verify password (stored_hash may contain salt in format "hash:salt")
+                if verify_password(password, stored_hash):
+                    # Authentication successful
+                    st.session_state.authentication_status = True
+                    st.session_state.name = user_data.get('name', username)
+                    st.session_state.username = username
+                    st.success(f"✅ Welcome, {st.session_state.name}!")
+                    st.rerun()
+                else:
+                    st.error("❌ Incorrect password")
+            else:
+                st.error("❌ Username not found")
+    
+    return False
+
+
 def main():
+    # Check authentication first
+    if not setup_authentication():
+        st.stop()
+    
     st.title("💰 Salary Calculation Dashboard")
     st.markdown("Calculate employee salaries for each shop based on uploaded reports")
     
@@ -127,26 +350,18 @@ def main():
         
         selected_shop = st.selectbox("Select Shop", shops)
         shop_config = config['shops'][selected_shop]
+        # Persist selected shop in session state for use in other tabs (e.g. email sending)
+        st.session_state.selected_shop = selected_shop
         
         st.markdown("---")
-        st.subheader("📁 Data Source")
+        st.subheader("📁 Report Upload")
         
-        # Default to file upload, make it more prominent
-        data_source = st.radio(
-            "Choose data source",
-            ["📤 Upload File", "☁️ Google Drive"],
-            index=0  # Default to file upload
+        # Only support file upload as the data source
+        uploaded_file = st.file_uploader(
+            "Upload Report File",
+            type=['csv', 'xlsx'],
+            help="Upload the salary report file from your computer"
         )
-        
-        if data_source == "☁️ Google Drive":
-            st.info("Configure Google Drive folder in config/shops.yaml")
-            file_id = st.text_input("Google Drive File ID", help="Enter the file ID from Google Drive URL")
-        else:
-            uploaded_file = st.file_uploader(
-                "Upload Report File",
-                type=['csv', 'xlsx'],
-                help="Upload the salary report file from your computer"
-            )
         
         st.markdown("---")
         st.subheader("📤 Airtable Export (Optional)")
@@ -204,22 +419,22 @@ def main():
                 st.warning("⚠️ Base ID or table name not configured in config/shops.yaml")
     
     # Main content area
-    tab1, tab2, tab3, tab4 = st.tabs(["Calculate", "Results", "Airtable Preview", "Monthly Adjustments"])
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+        "Calculate",
+        "Results",
+        "Airtable Preview",
+        "Monthly Adjustments",
+        "Sales Target Tracker",
+    ])
     
     with tab1:
         st.header(f"💰 Calculate Salaries - {shop_config['name']}")
         
-        # Show current data source status
-        if data_source == "📤 Upload File":
-            if uploaded_file is not None:
-                st.success(f"✅ File ready: **{uploaded_file.name}** ({uploaded_file.size:,} bytes)")
-            else:
-                st.info("📤 Please upload a report file using the sidebar")
+        # Show current upload status
+        if uploaded_file is not None:
+            st.success(f"✅ File ready: **{uploaded_file.name}** ({uploaded_file.size:,} bytes)")
         else:
-            if file_id:
-                st.info(f"☁️ Google Drive file ID: `{file_id}`")
-            else:
-                st.info("☁️ Please enter a Google Drive file ID in the sidebar")
+            st.info("📤 Please upload a report file using the sidebar")
         
         st.markdown("---")
         
@@ -232,151 +447,136 @@ def main():
                         st.error("Failed to load employee configuration")
                         st.stop()
                     
-                    # Load data
-                    if data_source == "☁️ Google Drive":
-                        if not file_id:
-                            st.error("Please enter a Google Drive file ID")
-                            st.stop()
-                        
-                        try:
-                            drive_client = GoogleDriveClient()
-                            if file_id.endswith('.csv'):
-                                df = drive_client.download_csv_as_dataframe(file_id)
-                            else:
-                                df = drive_client.download_excel_as_dataframe(file_id)
-                        except Exception as e:
-                            st.error(f"Error downloading from Google Drive: {str(e)}")
-                            st.stop()
-                    else:  # File upload
-                        if uploaded_file is None:
-                            st.error("❌ Please upload a file from your computer using the sidebar")
-                            st.stop()
-                        
-                        st.info(f"📄 Processing file: **{uploaded_file.name}**")
-                        
-                        try:
-                            logger.info(f"Loading file: {uploaded_file.name}")
-                            if uploaded_file.name.endswith('.csv'):
-                                # Read CSV as text first to handle variable column structure
-                                logger.info("Reading CSV as text to handle variable column structure...")
-                                uploaded_file.seek(0)
-                                
-                                # Read entire file as text
-                                try:
-                                    content = uploaded_file.read()
-                                    if isinstance(content, bytes):
-                                        # Try different encodings
-                                        for encoding in ['utf-8', 'latin-1', 'cp1252']:
-                                            try:
-                                                content = content.decode(encoding)
-                                                logger.info(f"Successfully decoded with {encoding}")
-                                                break
-                                            except:
-                                                continue
-                                    else:
-                                        content = str(content)
-                                    
-                                    lines = content.split('\n')
-                                    logger.info(f"File has {len(lines)} lines")
-                                    logger.info(f"First 10 lines:\n" + '\n'.join(lines[:10]))
-                                    
-                                    # Parse manually into a list of lists
-                                    all_rows = []
-                                    max_cols = 0
-                                    for line_num, line in enumerate(lines):
-                                        if not line.strip():
-                                            continue
-                                        # Split by comma, handling quoted fields
-                                        row = []
-                                        current_field = ""
-                                        in_quotes = False
-                                        
-                                        for char in line:
-                                            if char == '"':
-                                                in_quotes = not in_quotes
-                                            elif char == ',' and not in_quotes:
-                                                row.append(current_field.strip())
-                                                current_field = ""
-                                            else:
-                                                current_field += char
-                                        
-                                        if current_field or row:  # Add last field
-                                            row.append(current_field.strip())
-                                        
-                                        if row:
-                                            all_rows.append(row)
-                                            max_cols = max(max_cols, len(row))
-                                        
-                                        if line_num < 5:
-                                            logger.debug(f"Line {line_num}: {len(row)} columns - {row[:3]}")
-                                    
-                                    logger.info(f"Parsed {len(all_rows)} rows, max columns: {max_cols}")
-                                    
-                                    # Create DataFrame with consistent column count
-                                    # Pad rows to max_cols
-                                    for row in all_rows:
-                                        while len(row) < max_cols:
-                                            row.append('')
-                                    
-                                    df = pd.DataFrame(all_rows, columns=range(max_cols))
-                                    logger.info(f"Created DataFrame: {df.shape}")
-                                    logger.info(f"First 5 rows:\n{df.head()}")
-                                    
-                                except Exception as e:
-                                    logger.error(f"Error reading CSV as text: {e}")
-                                    # Fallback to pandas
-                                    uploaded_file.seek(0)
-                                    encodings = ['utf-8', 'latin-1', 'cp1252']
-                                    df = None
-                                    
-                                    for encoding in encodings:
+                    # Load data (file upload only)
+                    if uploaded_file is None:
+                        st.error("❌ Please upload a file from your computer using the sidebar")
+                        st.stop()
+                    
+                    st.info(f"📄 Processing file: **{uploaded_file.name}**")
+                    
+                    try:
+                        logger.info(f"Loading file: {uploaded_file.name}")
+                        if uploaded_file.name.endswith('.csv'):
+                            # Read CSV as text first to handle variable column structure
+                            logger.info("Reading CSV as text to handle variable column structure...")
+                            uploaded_file.seek(0)
+                            
+                            # Read entire file as text
+                            try:
+                                content = uploaded_file.read()
+                                if isinstance(content, bytes):
+                                    # Try different encodings
+                                    for encoding in ['utf-8', 'latin-1', 'cp1252']:
                                         try:
-                                            uploaded_file.seek(0)
-                                            try:
-                                                df = pd.read_csv(
-                                                    uploaded_file, 
-                                                    encoding=encoding, 
-                                                    header=None,
-                                                    on_bad_lines='skip',
-                                                    engine='python'
-                                                )
-                                                logger.info(f"Read CSV with {encoding} encoding (pandas 2.x): {df.shape}")
-                                                break
-                                            except TypeError:
-                                                uploaded_file.seek(0)
-                                                df = pd.read_csv(
-                                                    uploaded_file, 
-                                                    encoding=encoding, 
-                                                    header=None,
-                                                    error_bad_lines=False,
-                                                    warn_bad_lines=False,
-                                                    engine='python'
-                                                )
-                                                logger.info(f"Read CSV with {encoding} encoding (pandas 1.x): {df.shape}")
-                                                break
-                                        except Exception as e2:
-                                            logger.warning(f"{encoding} failed: {e2}")
+                                            content = content.decode(encoding)
+                                            logger.info(f"Successfully decoded with {encoding}")
+                                            break
+                                        except:
                                             continue
+                                else:
+                                    content = str(content)
+                                
+                                lines = content.split('\n')
+                                logger.info(f"File has {len(lines)} lines")
+                                logger.info(f"First 10 lines:\n" + '\n'.join(lines[:10]))
+                                
+                                # Parse manually into a list of lists
+                                all_rows = []
+                                max_cols = 0
+                                for line_num, line in enumerate(lines):
+                                    if not line.strip():
+                                        continue
+                                    # Split by comma, handling quoted fields
+                                    row = []
+                                    current_field = ""
+                                    in_quotes = False
                                     
-                                    if df is None:
-                                        raise Exception("Failed to read CSV with any method")
-                            else:
-                                logger.info("Reading Excel file...")
-                                df = pd.read_excel(uploaded_file)
-                                logger.info(f"Successfully read Excel: {df.shape}")
-                            
-                            logger.info(f"File loaded: {len(df)} rows, {len(df.columns)} columns")
-                            logger.info(f"Column names: {list(df.columns)}")
-                            logger.info(f"First row data: {df.iloc[0].tolist() if len(df) > 0 else 'Empty'}")
-                            st.success(f"✅ File loaded successfully ({len(df)} rows, {len(df.columns)} columns)")
-                            
-                            # Show preview of the file
-                            with st.expander("👀 Preview Raw File (First 10 Rows)", expanded=False):
-                                st.dataframe(df.head(10), width='stretch')
-                                st.write(f"**Columns:** {list(df.columns)}")
-                        except Exception as e:
-                            st.error(f"❌ Error reading file: {str(e)}")
-                            st.stop()
+                                    for char in line:
+                                        if char == '"':
+                                            in_quotes = not in_quotes
+                                        elif char == ',' and not in_quotes:
+                                            row.append(current_field.strip())
+                                            current_field = ""
+                                        else:
+                                            current_field += char
+                                    
+                                    if current_field or row:  # Add last field
+                                        row.append(current_field.strip())
+                                    
+                                    if row:
+                                        all_rows.append(row)
+                                        max_cols = max(max_cols, len(row))
+                                    
+                                    if line_num < 5:
+                                        logger.debug(f"Line {line_num}: {len(row)} columns - {row[:3]}")
+                                
+                                logger.info(f"Parsed {len(all_rows)} rows, max columns: {max_cols}")
+                                
+                                # Create DataFrame with consistent column count
+                                # Pad rows to max_cols
+                                for row in all_rows:
+                                    while len(row) < max_cols:
+                                        row.append('')
+                                
+                                df = pd.DataFrame(all_rows, columns=range(max_cols))
+                                logger.info(f"Created DataFrame: {df.shape}")
+                                logger.info(f"First 5 rows:\n{df.head()}")
+                                
+                            except Exception as e:
+                                logger.error(f"Error reading CSV as text: {e}")
+                                # Fallback to pandas
+                                uploaded_file.seek(0)
+                                encodings = ['utf-8', 'latin-1', 'cp1252']
+                                df = None
+                                
+                                for encoding in encodings:
+                                    try:
+                                        uploaded_file.seek(0)
+                                        try:
+                                            df = pd.read_csv(
+                                                uploaded_file, 
+                                                encoding=encoding, 
+                                                header=None,
+                                                on_bad_lines='skip',
+                                                engine='python'
+                                            )
+                                            logger.info(f"Read CSV with {encoding} encoding (pandas 2.x): {df.shape}")
+                                            break
+                                        except TypeError:
+                                            uploaded_file.seek(0)
+                                            df = pd.read_csv(
+                                                uploaded_file, 
+                                                encoding=encoding, 
+                                                header=None,
+                                                error_bad_lines=False,
+                                                warn_bad_lines=False,
+                                                engine='python'
+                                            )
+                                            logger.info(f"Read CSV with {encoding} encoding (pandas 1.x): {df.shape}")
+                                            break
+                                    except Exception as e2:
+                                        logger.warning(f"{encoding} failed: {e2}")
+                                        continue
+                                
+                                if df is None:
+                                    raise Exception("Failed to read CSV with any method")
+                        else:
+                            logger.info("Reading Excel file...")
+                            df = pd.read_excel(uploaded_file)
+                            logger.info(f"Successfully read Excel: {df.shape}")
+                        
+                        logger.info(f"File loaded: {len(df)} rows, {len(df.columns)} columns")
+                        logger.info(f"Column names: {list(df.columns)}")
+                        logger.info(f"First row data: {df.iloc[0].tolist() if len(df) > 0 else 'Empty'}")
+                        st.success(f"✅ File loaded successfully ({len(df)} rows, {len(df.columns)} columns)")
+                        
+                        # Show preview of the file
+                        with st.expander("👀 Preview Raw File (First 10 Rows)", expanded=False):
+                            st.dataframe(df.head(10), width='stretch')
+                            st.write(f"**Columns:** {list(df.columns)}")
+                    except Exception as e:
+                        st.error(f"❌ Error reading file: {str(e)}")
+                        st.stop()
                     
                     # Process data
                     with st.spinner("🔄 Parsing data..."):
@@ -577,6 +777,9 @@ def main():
                     st.session_state.results = results
                     st.session_state.calculations_done = True
                     st.session_state.all_daily_calculations = all_daily_calculations
+                    # Store employee configuration and shop key for later use (e.g. email sending)
+                    st.session_state.employees_config = employees
+                    st.session_state.results_shop_key = selected_shop
                     
                     # Always prepare Airtable records for preview (even if export is disabled)
                     # Include both daily records and monthly summary records with full breakdown
@@ -770,6 +973,16 @@ def main():
             st.info("👆 Go to the 'Calculate' tab and run a calculation first to see results here")
         else:
             results = st.session_state.results
+            employees_config = st.session_state.get('employees_config', {})
+            # Resolve the shop that these results belong to (not just the current sidebar selection)
+            results_shop_key = st.session_state.get('results_shop_key')
+            if not results_shop_key:
+                # Fallback to current sidebar selection or first configured shop
+                results_shop_key = st.session_state.get('selected_shop') or list(config['shops'].keys())[0]
+            current_shop_config = config['shops'].get(results_shop_key, {})
+            email_config = current_shop_config.get('email', {})
+            default_from_email = email_config.get('from_email', '')
+            default_management_recipients = email_config.get('management_recipients', []) or []
             
             # Summary table
             st.subheader("Monthly Summary")
@@ -866,6 +1079,113 @@ def main():
                     mime="text/csv"
                 )
                 
+                # Email breakdown to the selected employee
+                st.subheader("✉️ Email Breakdown to Employee")
+                employee_info = employees_config.get(selected_employee, {}) if isinstance(employees_config, dict) else {}
+                default_employee_email = employee_info.get('email', '')
+                from_email_input = st.text_input(
+                    "From email (sender)",
+                    value=default_from_email,
+                    help="This should normally be the shop's email address",
+                    key=f"employee_from_email_{selected_employee}",
+                )
+                employee_email_input = st.text_input(
+                    "Employee email",
+                    value=default_employee_email,
+                    help="Email address for the selected employee (loaded from employee config where available)",
+                    key=f"employee_to_email_{selected_employee}",
+                )
+                
+                if st.button("Send breakdown to this employee", key="send_employee_email"):
+                    if not employee_email_input:
+                        st.error("Please provide an employee email address.")
+                    elif not from_email_input:
+                        st.error("Please provide a sender email address.")
+                    else:
+                        try:
+                            email_client = get_email_client_for_shop(results_shop_key)
+                        except ValueError as e:
+                            st.error(f"Email not configured: {e}")
+                        else:
+                            html_content = email_client.create_breakdown_email(
+                                selected_employee,
+                                summary,
+                                daily,
+                                employee_email_input,
+                            )
+                            subject = f"{current_shop_config.get('name', 'Shop')} - Salary Breakdown for {selected_employee}"
+                            success = email_client.send_email(
+                                to_email=employee_email_input,
+                                subject=subject,
+                                html_content=html_content,
+                                from_email=from_email_input,
+                            )
+                            if success:
+                                st.success(f"Salary breakdown sent to {employee_email_input}")
+                            else:
+                                st.error("Failed to send email to employee. Check server logs for details.")
+            
+            # Email all employee breakdowns to management
+            st.subheader("📨 Send All Breakdowns to Management")
+            if not results:
+                st.info("No calculation results available to send.")
+            else:
+                # First: sender address
+                mgmt_from_email_input = st.text_input(
+                    "From email (sender)",
+                    value=default_from_email,
+                    help="Sender address for management emails (usually the shop email).",
+                    key="management_from_email",
+                )
+                # Second: management recipient list
+                management_recipients_str = ", ".join(default_management_recipients)
+                management_recipients_input = st.text_input(
+                    "Management recipient emails (comma-separated)",
+                    value=management_recipients_str,
+                    help="These addresses will receive a copy of each individual salary breakdown for this shop.",
+                    key="management_recipients",
+                )
+                
+                if st.button("Send all employee breakdowns to management", key="send_management_emails"):
+                    recipients = [e.strip() for e in management_recipients_input.split(",") if e.strip()]
+                    if not recipients:
+                        st.error("Please provide at least one management recipient email.")
+                    elif not mgmt_from_email_input:
+                        st.error("Please provide a sender email address for management emails.")
+                    else:
+                        try:
+                            email_client = get_email_client_for_shop(results_shop_key)
+                        except ValueError as e:
+                            st.error(f"Email not configured: {e}")
+                        else:
+                            total_sent = 0
+                            total_attempts = 0
+                            for emp_name, emp_data in results.items():
+                                emp_summary = emp_data['summary']
+                                emp_daily = emp_data['daily']
+                                # Use employee email from config if available, otherwise blank
+                                emp_info = employees_config.get(emp_name, {}) if isinstance(employees_config, dict) else {}
+                                emp_email_addr = emp_info.get('email', '')
+                                html_content = email_client.create_breakdown_email(
+                                    emp_name,
+                                    emp_summary,
+                                    emp_daily,
+                                    emp_email_addr,
+                                )
+                                subject = f"{current_shop_config.get('name', 'Shop')} - Salary Breakdown for {emp_name}"
+                                for r in recipients:
+                                    total_attempts += 1
+                                    if email_client.send_email(
+                                        to_email=r,
+                                        subject=subject,
+                                        html_content=html_content,
+                                        from_email=mgmt_from_email_input,
+                                    ):
+                                        total_sent += 1
+                            if total_sent > 0:
+                                st.success(f"Sent {total_sent} management emails (out of {total_attempts} attempts).")
+                            else:
+                                st.error("Failed to send any management emails. Check email configuration and server logs.")
     
     with tab3:
         st.header("📤 Airtable Export Preview")
@@ -1292,6 +1612,180 @@ Table Name: {repr(table_name)} (type: {type(table_name).__name__})
                             st.success("✅ All adjustments cleared")
                             st.cache_data.clear()
                             st.rerun()
-    
+
+    with tab5:
+        st.header("🎯 Sales Target Tracker")
+        st.info(
+            "Set an approved monthly target and update the **Total reached** each day. "
+            "The app works out how far through the month you are and whether you are ahead "
+            "or behind where you should be by today."
+        )
+
+        with st.expander("ℹ️ How this tracker works", expanded=False):
+            st.markdown(
+                """
+                **Workflow**
+                - Use the **sidebar** to choose the shop (e.g. Opatra or PYT). This page always shows data for the selected shop.
+                - Set the **Approved target (£)** once per month; it is saved automatically for that shop and month.
+                - Each day, update **Total reached so far (£)** with the cumulative sales to date, then click **Update calculations** (or press Enter).
+                - **Current date** is used only to work out how many days have passed in the month; change it if you are entering data for a different day.
+
+                **What each metric means**
+                - **Target**: Your approved sales target for the *whole* month (e.g. £60,000).
+                - **Total days**: Number of days in the selected month (e.g. 28 for February, 31 for March).
+                - **Days passed / Days left**: How far through the month we are, based on the **Current date** you chose.
+                - **Total reached**: The cumulative sales you entered; this is the only number you edit daily.
+                - **Average so far**: Total reached ÷ Days passed — your average daily sales so far.
+                - **Expected sales so far**: What you *should* have sold by today if you were exactly on track:  
+                  `Target × (Days passed ÷ Total days)`.  
+                  This is the benchmark we compare against.
+                - **Direction of**: Same as Total reached; the amount we are comparing to the expected.
+                - **Direction vs target**: `(Total reached ÷ Expected sales so far) × 100%`.  
+                  - **100%** = on track.  
+                  - **Above 100%** = ahead of schedule.  
+                  - **Below 100%** = behind schedule.  
+                  The delta (e.g. +41.67%) shows how far ahead or behind you are.
+                - **Left to reach**: Target − Total reached — how much more you need to hit the target.
+                - **Avg needed per day**: Left to reach ÷ Days left — the average you need to sell *each remaining day* to still hit the target. Shown as N/A when there are no days left.
+                - **Daily target**: Target ÷ Total days — the average daily sales needed over the *entire* month to hit the target.
+
+                **Traffic‑light status**
+                - 🔴 **Below target**: You are more than 10% behind expected sales (Direction vs target &lt; 90%).
+                - 🟡 **Around target**: You are within ±10% of expected sales (90%–110%).
+                - 🟢 **Above target**: You are more than 10% ahead of expected sales (Direction vs target &gt; 110%).
+                """
+            )
+
+        # Use a form so that pressing Enter submits ONLY this section
+        with st.form("sales_target_tracker_form", clear_on_submit=False):
+            col1, col2 = st.columns(2)
+            with col1:
+                st.number_input(
+                    "Approved target (£)",
+                    min_value=0.0,
+                    step=500.0,
+                    format="%.2f",
+                    key="target_approved",
+                )
+                st.number_input(
+                    "Total reached so far (£)",
+                    min_value=0.0,
+                    step=500.0,
+                    format="%.2f",
+                    key="target_total_reached",
+                )
+            with col2:
+                st.date_input(
+                    "Current date (used to calculate days passed)",
+                    value=st.session_state.target_current_date,
+                    key="target_current_date",
+                )
+
+            st.form_submit_button("Update calculations")
+
+        # Read current values from session state for calculations
+        approved_target = float(st.session_state.get("target_approved", 0.0))
+        total_reached = float(st.session_state.get("target_total_reached", 0.0))
+        current_date = st.session_state.get("target_current_date", datetime.today().date())
+
+        # Load or update saved targets for this shop/month
+        shop_key = st.session_state.get("selected_shop", list(load_config().get("shops", {}).keys())[0])
+        targets_config = load_shop_targets()
+        year = current_date.year
+        month = current_date.month
+        month_key = f"{year}-{month:02d}"
+
+        # If we have a stored target and the current value is zero, pre-fill from storage
+        stored_target = (
+            targets_config.get(shop_key, {})
+            .get(month_key, {})
+            .get("approved_target")
+        )
+        if approved_target == 0.0 and stored_target:
+            approved_target = float(stored_target)
+            st.session_state.target_approved = approved_target
+        else:
+            # Persist non-zero targets automatically
+            if approved_target > 0:
+                if shop_key not in targets_config:
+                    targets_config[shop_key] = {}
+                if month_key not in targets_config[shop_key]:
+                    targets_config[shop_key][month_key] = {}
+                targets_config[shop_key][month_key]["approved_target"] = float(approved_target)
+                save_shop_targets(targets_config)
+
+        # Core calculations
+        total_days = calendar.monthrange(year, month)[1]
+        days_passed = min(current_date.day, total_days)
+        days_left = max(total_days - days_passed, 0)
+
+        average_so_far = total_reached / days_passed if days_passed > 0 else 0.0
+        direction_of = total_reached
+
+        # Expected sales by today if you were exactly on track
+        expected_so_far = 0.0
+        if approved_target > 0 and total_days > 0 and days_passed > 0:
+            expected_so_far = approved_target * (days_passed / total_days)
+
+        # Compare actual progress against expected progress
+        if expected_so_far > 0:
+            direction_vs_target_pct = (direction_of / expected_so_far) * 100.0
+            diff_vs_target_pct = direction_vs_target_pct - 100.0
+        else:
+            direction_vs_target_pct = 0.0
+            diff_vs_target_pct = 0.0
+
+        left_to_reach = max(approved_target - total_reached, 0.0)
+        avg_needed = left_to_reach / days_left if days_left > 0 else None
+        daily_target = approved_target / total_days if total_days > 0 else 0.0
+
+        st.markdown("---")
+
+        # High-level metrics
+        m1, m2, m3, m4 = st.columns(4)
+        with m1:
+            st.metric("Target", format_currency(approved_target))
+        with m2:
+            st.metric("Total days (month)", total_days)
+        with m3:
+            st.metric("Days passed", days_passed)
+        with m4:
+            st.metric("Days left", days_left)
+
+        st.markdown("### Progress Summary")
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            st.metric("Total reached", format_currency(total_reached))
+            st.metric("Average so far", format_currency(average_so_far))
+        with c2:
+            st.metric("Direction of", format_currency(direction_of))
+            st.metric("Expected sales so far", format_currency(expected_so_far))
+        with c3:
+            st.metric(
+                "Direction vs target",
+                f"{direction_vs_target_pct:.2f}%",
+                f"{diff_vs_target_pct:+.2f}%",
+            )
+            st.metric("Left to reach", format_currency(left_to_reach))
+            if avg_needed is None:
+                st.metric("Avg needed per day", "N/A")
+            else:
+                st.metric("Avg needed per day", format_currency(avg_needed))
+            st.metric("Daily target", format_currency(daily_target))
+
+        # Traffic-light style status
+        if approved_target > 0:
+            st.markdown("---")
+            status_col = st.columns(1)[0]
+            if diff_vs_target_pct < -10:
+                with status_col:
+                    st.error("🔴 **Below target** – consider increasing daily sales.")
+            elif diff_vs_target_pct <= 10:
+                with status_col:
+                    st.warning("🟡 **Around target** – keep an eye on performance.")
+            else:
+                with status_col:
+                    st.success("🟢 **Above target** – great progress!")
+
 if __name__ == "__main__":
     main()

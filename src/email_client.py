@@ -192,7 +192,7 @@ class EmailClient:
         return html
     
     def send_email(self, to_email: str, subject: str, html_content: str, 
-                   from_email: str = None) -> bool:
+                   from_email: str = None, reply_to: str = None) -> bool:
         """
         Send email
         
@@ -201,6 +201,7 @@ class EmailClient:
             subject: Email subject
             html_content: HTML email content
             from_email: Sender email (default: smtp_user)
+            reply_to: Optional reply-to address (where replies should go)
             
         Returns:
             True if successful, False otherwise

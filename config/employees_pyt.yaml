@@ -32,6 +32,7 @@ name_mapping:
   "Molly": "Molly"
   "Oboh": "Trena"
   "B": "Billie"
+  "Jouman Jouman" : "Jouman"
 
 # Patterns to exclude (case-insensitive)
 exclude_patterns:
@@ -131,6 +132,11 @@ employees:
     payment_type: hourly_only
     hourly_rate: 7.55
     email: "billie.g2009@hotmail.com"
+
+  Jouman:
+    payment_type: hourly_only
+    hourly_rate: 12.21
+    email: "Jouman.jb@gmail.com"
     
   # Junior Stylists
   Eiman:
