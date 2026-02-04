@@ -418,7 +418,22 @@ def main():
             else:
                 st.warning("⚠️ Base ID or table name not configured in config/shops.yaml")
     
-    # Main content area
+    # Main content area – larger, easier-to-see tabs
+    st.markdown(
+        """
+        <style>
+        /* Bigger tab labels (works across Streamlit versions) */
+        .stTabs [data-baseweb="tab"],
+        .stTabs [data-baseweb="tab-list"] button,
+        button[data-baseweb="tab"] {
+            font-size: 1.15rem !important;
+            padding: 0.65rem 1.4rem !important;
+            font-weight: 500 !important;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
     tab1, tab2, tab3, tab4, tab5 = st.tabs([
         "Calculate",
         "Results",
