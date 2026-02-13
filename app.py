@@ -219,12 +219,16 @@ def _load_daily_targets_from_file() -> Dict:
                 staff_targets = val.get("staff_daily_targets")
                 if not isinstance(staff_targets, dict):
                     staff_targets = {}
+                staff_sales = val.get("staff_daily_sales")
+                if not isinstance(staff_sales, dict):
+                    staff_sales = {}
                 out[shop_key][date_str] = {
                     "staff_working": val.get("staff_working") or [],
                     "staff_daily_targets": {k: float(v) for k, v in staff_targets.items()},
+                    "staff_daily_sales": {k: float(v) for k, v in staff_sales.items()},
                 }
             else:
-                out[shop_key][date_str] = {"staff_working": [], "staff_daily_targets": {}}
+                out[shop_key][date_str] = {"staff_working": [], "staff_daily_targets": {}, "staff_daily_sales": {}}
     return out
 
 
@@ -1784,89 +1788,127 @@ Table Name: {repr(table_name)} (type: {type(table_name).__name__})
                 """
             )
 
-        # --- Daily target rubric: manager sets who is working and per-staff daily target per day ---
-        st.markdown("---")
+        # --- Card 1: Daily target rubric ---
         if "_daily_target_saved_toast" in st.session_state:
             st.toast(st.session_state.pop("_daily_target_saved_toast"), icon="✅")
-        st.subheader("📋 Daily target (manager)")
-        st.caption("Set who is working each day and each staff member’s individual sales target for that day.")
-        shop_key_tracker = st.session_state.get("selected_shop", list(load_config().get("shops", {}).keys())[0])
-        employees_tracker, _, _ = load_employee_config(shop_key_tracker)
-        employee_names = list(employees_tracker.keys()) if employees_tracker else []
 
-        daily_targets_config = load_daily_targets()
-        shop_daily = daily_targets_config.get(shop_key_tracker, {})
+        with st.container(border=True):
+            st.subheader("📋 Daily target (manager)")
+            st.caption("Set who is working each day and each staff member’s individual sales target for that day.")
+            shop_key_tracker = st.session_state.get("selected_shop", list(load_config().get("shops", {}).keys())[0])
+            employees_tracker, _, _ = load_employee_config(shop_key_tracker)
+            employee_names = list(employees_tracker.keys()) if employees_tracker else []
 
-        # Date and staff selection OUTSIDE the form so they update immediately and per-staff inputs appear
-        rubric_date = st.date_input(
-            "Date",
-            value=st.session_state.get("daily_target_date", datetime.today().date()),
-            key="daily_target_date",
-            help="The day you are setting the target for.",
-        )
-        date_str = rubric_date.strftime("%Y-%m-%d")
-        existing = shop_daily.get(date_str, {"staff_working": [], "staff_daily_targets": {}})
-        existing_staff = existing.get("staff_working") or []
-        existing_targets = existing.get("staff_daily_targets") or {}
+            daily_targets_config = load_daily_targets()
+            shop_daily = daily_targets_config.get(shop_key_tracker, {})
 
-        staff_working = st.multiselect(
-            "Staff working this day",
-            options=employee_names,
-            default=existing_staff,
-            key="daily_rubric_staff",
-            help="Select everyone who is working on this date. Individual target fields appear below.",
-        )
+            # Date and staff selection OUTSIDE the form so they update immediately and per-staff inputs appear
+            rubric_date = st.date_input(
+                "Date",
+                value=st.session_state.get("daily_target_date", datetime.today().date()),
+                key="daily_target_date",
+                help="The day you are setting the target for.",
+            )
+            date_str = rubric_date.strftime("%Y-%m-%d")
+            existing = shop_daily.get(date_str, {"staff_working": [], "staff_daily_targets": {}, "staff_daily_sales": {}})
+            existing_staff = existing.get("staff_working") or []
+            existing_targets = existing.get("staff_daily_targets") or {}
+            existing_sales = existing.get("staff_daily_sales") or {}
 
-        st.markdown("**Daily target per staff (£)**")
-        with st.form("daily_target_rubric_form", clear_on_submit=False):
-            staff_daily_targets = {}
-            num_cols = min(3, max(1, len(staff_working)))
-            cols = st.columns(num_cols)
-            for i, name in enumerate(staff_working):
-                with cols[i % num_cols]:
-                    staff_daily_targets[name] = st.number_input(
-                        f"{name}",
-                        min_value=0.0,
-                        step=50.0,
-                        value=float(existing_targets.get(name, 0)),
-                        format="%.2f",
-                        key=f"daily_target_{date_str}_{name}",
-                        help=f"Sales target for {name} on this day.",
-                    )
-            submitted_rubric = st.form_submit_button("Save daily target")
+            staff_working = st.multiselect(
+                "Staff working this day",
+                options=employee_names,
+                default=existing_staff,
+                key="daily_rubric_staff",
+                help="Select everyone who is working on this date. Individual target fields appear below.",
+            )
 
-        if submitted_rubric:
-            staff_working_submitted = staff_working  # current selection (outside form)
-            staff_daily_targets_submitted = {}
-            for name in staff_working_submitted:
-                key = f"daily_target_{date_str}_{name}"
-                staff_daily_targets_submitted[name] = float(st.session_state.get(key, 0))
-            if shop_key_tracker not in daily_targets_config:
-                daily_targets_config[shop_key_tracker] = {}
-            daily_targets_config[shop_key_tracker][date_str] = {
-                "staff_working": staff_working_submitted,
-                "staff_daily_targets": staff_daily_targets_submitted,
-            }
-            save_daily_targets(daily_targets_config)
-            total = sum(staff_daily_targets_submitted.values())
-            st.session_state["_daily_target_saved_toast"] = f"Daily target saved for {date_str} (£{total:,.2f})"
-            st.rerun()
+            st.markdown("**Daily target & sales per staff (£)**")
+            with st.form("daily_target_rubric_form", clear_on_submit=False):
+                staff_daily_targets = {}
+                staff_daily_sales = {}
+                for name in staff_working:
+                    with st.expander(f"**{name}**", expanded=True):
+                        c1, c2 = st.columns(2)
+                        with c1:
+                            staff_daily_targets[name] = st.number_input(
+                                "Target (£)",
+                                min_value=0.0,
+                                step=50.0,
+                                value=float(existing_targets.get(name, 0)),
+                                format="%.2f",
+                                key=f"daily_target_{date_str}_{name}",
+                                help=f"Sales target for {name} on this day.",
+                            )
+                        with c2:
+                            staff_daily_sales[name] = st.number_input(
+                                "Actual sales (£)",
+                                min_value=0.0,
+                                step=50.0,
+                                value=float(existing_sales.get(name, 0)),
+                                format="%.2f",
+                                key=f"daily_sales_{date_str}_{name}",
+                                help=f"Total sales achieved by {name} on this day.",
+                            )
+                submitted_rubric = st.form_submit_button("Save daily target")
 
-        # Show today's manager-set daily targets (per staff and total)
-        today_str = datetime.today().date().strftime("%Y-%m-%d")
-        today_rubric = shop_daily.get(today_str, {})
-        today_staff = today_rubric.get("staff_working") or []
-        today_targets = today_rubric.get("staff_daily_targets") or {}
-        if today_staff or today_targets:
-            with st.expander("Today’s daily target (manager)", expanded=True):
-                if today_targets:
-                    for name, target in today_targets.items():
-                        if target > 0:
-                            st.write(f"**{name}:** {format_currency(target)}")
-                    st.metric("Total daily target", format_currency(sum(today_targets.values())))
-                if today_staff and not today_targets:
-                    st.write("**Staff working:**", ", ".join(today_staff))
+            if submitted_rubric:
+                staff_working_submitted = staff_working  # current selection (outside form)
+                staff_daily_targets_submitted = {}
+                staff_daily_sales_submitted = {}
+                for name in staff_working_submitted:
+                    key_t = f"daily_target_{date_str}_{name}"
+                    key_s = f"daily_sales_{date_str}_{name}"
+                    staff_daily_targets_submitted[name] = float(st.session_state.get(key_t, 0))
+                    staff_daily_sales_submitted[name] = float(st.session_state.get(key_s, 0))
+                if shop_key_tracker not in daily_targets_config:
+                    daily_targets_config[shop_key_tracker] = {}
+                daily_targets_config[shop_key_tracker][date_str] = {
+                    "staff_working": staff_working_submitted,
+                    "staff_daily_targets": staff_daily_targets_submitted,
+                    "staff_daily_sales": staff_daily_sales_submitted,
+                }
+                save_daily_targets(daily_targets_config)
+                total = sum(staff_daily_targets_submitted.values())
+                st.session_state["_daily_target_saved_toast"] = f"Daily target saved for {date_str} (£{total:,.2f})"
+                st.rerun()
 
+            # Performance vs target (for selected date)
+            date_targets = shop_daily.get(date_str, {})
+            date_targets_dict = date_targets.get("staff_daily_targets") or {}
+            date_sales_dict = date_targets.get("staff_daily_sales") or {}
+            staff_with_data = [n for n in (set(date_targets_dict.keys()) | set(date_sales_dict.keys()))]
+            if staff_with_data:
+                st.markdown("**Performance vs target**")
+                for name in sorted(staff_with_data):
+                    target = float(date_targets_dict.get(name, 0) or 0)
+                    sales = float(date_sales_dict.get(name, 0) or 0)
+                    if target > 0 and sales > 0:
+                        diff = sales - target
+                        pct = (diff / target) * 100
+                        if diff >= 0:
+                            st.success(f"**{name}:** Target {format_currency(target)} → Sales {format_currency(sales)} ({pct:+.1f}% above)")
+                        else:
+                            st.warning(f"**{name}:** Target {format_currency(target)} → Sales {format_currency(sales)} ({pct:.1f}% below)")
+                    elif target > 0 or sales > 0:
+                        st.info(f"**{name}:** Target {format_currency(target)} | Sales {format_currency(sales)}")
+
+            # Show today's manager-set daily targets (per staff and total)
+            today_str = datetime.today().date().strftime("%Y-%m-%d")
+            today_rubric = shop_daily.get(today_str, {})
+            today_staff = today_rubric.get("staff_working") or []
+            today_targets = today_rubric.get("staff_daily_targets") or {}
+            if today_staff or today_targets:
+                with st.expander("Today’s daily target (manager)", expanded=True):
+                    if today_targets:
+                        for name, target in today_targets.items():
+                            if target > 0:
+                                st.write(f"**{name}:** {format_currency(target)}")
+                        st.metric("Total daily target", format_currency(sum(today_targets.values())))
+                    if today_staff and not today_targets:
+                        st.write("**Staff working:**", ", ".join(today_staff))
+
+        # --- Card 2: Shop target tracker ---
         # Pre-fill from stored targets BEFORE the form (cannot modify widget-bound session state after widget is created)
         shop_key = st.session_state.get("selected_shop", list(load_config().get("shops", {}).keys())[0])
         current_date_pre = st.session_state.get("target_current_date", datetime.today().date())
@@ -1899,137 +1941,140 @@ Table Name: {repr(table_name)} (type: {type(table_name).__name__})
             ):
                 st.session_state.target_total_reached = float(stored_total_reached_pre)
 
-        # Use a form so that pressing Enter submits ONLY this section
-        with st.form("sales_target_tracker_form", clear_on_submit=False):
-            col1, col2 = st.columns(2)
-            with col1:
-                st.number_input(
-                    "Approved target (£)",
-                    min_value=0.0,
-                    step=500.0,
-                    format="%.2f",
-                    key="target_approved",
-                )
-                st.number_input(
-                    "Total reached so far (£)",
-                    min_value=0.0,
-                    step=500.0,
-                    format="%.2f",
-                    key="target_total_reached",
-                )
-            with col2:
-                st.date_input(
-                    "Current date (used to calculate days passed)",
-                    value=st.session_state.target_current_date,
-                    key="target_current_date",
-                )
+        with st.container(border=True):
+            st.subheader("🏪 Shop target (monthly)")
+            st.caption("Monthly sales target and progress for this shop.")
+            # Use a form so that pressing Enter submits ONLY this section
+            with st.form("sales_target_tracker_form", clear_on_submit=False):
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.number_input(
+                        "Approved target (£)",
+                        min_value=0.0,
+                        step=500.0,
+                        format="%.2f",
+                        key="target_approved",
+                    )
+                    st.number_input(
+                        "Total reached so far (£)",
+                        min_value=0.0,
+                        step=500.0,
+                        format="%.2f",
+                        key="target_total_reached",
+                    )
+                with col2:
+                    st.date_input(
+                        "Current date (used to calculate days passed)",
+                        value=st.session_state.target_current_date,
+                        key="target_current_date",
+                    )
 
-            sales_target_form_submitted = st.form_submit_button("Update calculations")
+                sales_target_form_submitted = st.form_submit_button("Update calculations")
 
-        # Read current values from session state for calculations
-        approved_target = float(st.session_state.get("target_approved", 0.0))
-        total_reached = float(st.session_state.get("target_total_reached", 0.0))
-        current_date = st.session_state.get("target_current_date", datetime.today().date())
+            # Read current values from session state for calculations
+            approved_target = float(st.session_state.get("target_approved", 0.0))
+            total_reached = float(st.session_state.get("target_total_reached", 0.0))
+            current_date = st.session_state.get("target_current_date", datetime.today().date())
 
-        # Load or update saved targets for this shop/month
-        shop_key = st.session_state.get("selected_shop", list(load_config().get("shops", {}).keys())[0])
-        targets_config = load_shop_targets()
-        year = current_date.year
-        month = current_date.month
-        month_key = f"{year}-{month:02d}"
+            # Load or update saved targets for this shop/month
+            shop_key = st.session_state.get("selected_shop", list(load_config().get("shops", {}).keys())[0])
+            targets_config = load_shop_targets()
+            year = current_date.year
+            month = current_date.month
+            month_key = f"{year}-{month:02d}"
 
-        # Pre-fill is done before the form; use approved_target from session state (already set above)
-        stored_target = (
-            targets_config.get(shop_key, {})
-            .get(month_key, {})
-            .get("approved_target")
-        )
-        if approved_target == 0.0 and stored_target:
-            approved_target = float(stored_target)
-        if approved_target > 0 or total_reached > 0:
-            # Persist targets and total reached
-            if shop_key not in targets_config:
-                targets_config[shop_key] = {}
-            if month_key not in targets_config[shop_key]:
-                targets_config[shop_key][month_key] = {}
-            targets_config[shop_key][month_key]["approved_target"] = float(approved_target)
-            targets_config[shop_key][month_key]["total_reached"] = float(total_reached)
-            save_shop_targets(targets_config)
-            if sales_target_form_submitted:
-                st.toast(f"Shop target updated (£{approved_target:,.2f} for {month_key})", icon="✅")
-
-        # Core calculations
-        total_days = calendar.monthrange(year, month)[1]
-        days_passed = min(current_date.day, total_days)
-        days_left = max(total_days - days_passed, 0)
-
-        average_so_far = total_reached / days_passed if days_passed > 0 else 0.0
-        direction_of = total_reached
-
-        # Expected sales by today if you were exactly on track
-        expected_so_far = 0.0
-        if approved_target > 0 and total_days > 0 and days_passed > 0:
-            expected_so_far = approved_target * (days_passed / total_days)
-
-        # Compare actual progress against expected progress
-        if expected_so_far > 0:
-            direction_vs_target_pct = (direction_of / expected_so_far) * 100.0
-            diff_vs_target_pct = direction_vs_target_pct - 100.0
-        else:
-            direction_vs_target_pct = 0.0
-            diff_vs_target_pct = 0.0
-
-        left_to_reach = max(approved_target - total_reached, 0.0)
-        avg_needed = left_to_reach / days_left if days_left > 0 else None
-        daily_target = approved_target / total_days if total_days > 0 else 0.0
-
-        st.markdown("---")
-
-        # High-level metrics
-        m1, m2, m3, m4 = st.columns(4)
-        with m1:
-            st.metric("Target", format_currency(approved_target))
-        with m2:
-            st.metric("Total days (month)", total_days)
-        with m3:
-            st.metric("Days passed", days_passed)
-        with m4:
-            st.metric("Days left", days_left)
-
-        st.markdown("### Progress Summary")
-        c1, c2, c3 = st.columns(3)
-        with c1:
-            st.metric("Total reached", format_currency(total_reached))
-            st.metric("Average so far", format_currency(average_so_far))
-        with c2:
-            st.metric("Direction of", format_currency(direction_of))
-            st.metric("Expected sales so far", format_currency(expected_so_far))
-        with c3:
-            st.metric(
-                "Direction vs target",
-                f"{direction_vs_target_pct:.2f}%",
-                f"{diff_vs_target_pct:+.2f}%",
+            # Pre-fill is done before the form; use approved_target from session state (already set above)
+            stored_target = (
+                targets_config.get(shop_key, {})
+                .get(month_key, {})
+                .get("approved_target")
             )
-            st.metric("Left to reach", format_currency(left_to_reach))
-            if avg_needed is None:
-                st.metric("Avg needed per day", "N/A")
-            else:
-                st.metric("Avg needed per day", format_currency(avg_needed))
-            st.metric("Daily target", format_currency(daily_target))
+            if approved_target == 0.0 and stored_target:
+                approved_target = float(stored_target)
+            if approved_target > 0 or total_reached > 0:
+                # Persist targets and total reached
+                if shop_key not in targets_config:
+                    targets_config[shop_key] = {}
+                if month_key not in targets_config[shop_key]:
+                    targets_config[shop_key][month_key] = {}
+                targets_config[shop_key][month_key]["approved_target"] = float(approved_target)
+                targets_config[shop_key][month_key]["total_reached"] = float(total_reached)
+                save_shop_targets(targets_config)
+                if sales_target_form_submitted:
+                    st.toast(f"Shop target updated (£{approved_target:,.2f} for {month_key})", icon="✅")
 
-        # Traffic-light style status
-        if approved_target > 0:
-            st.markdown("---")
-            status_col = st.columns(1)[0]
-            if diff_vs_target_pct < -10:
-                with status_col:
-                    st.error("🔴 **Below target** – consider increasing daily sales.")
-            elif diff_vs_target_pct <= 10:
-                with status_col:
-                    st.warning("🟡 **Around target** – keep an eye on performance.")
+            # Core calculations
+            total_days = calendar.monthrange(year, month)[1]
+            days_passed = min(current_date.day, total_days)
+            days_left = max(total_days - days_passed, 0)
+
+            average_so_far = total_reached / days_passed if days_passed > 0 else 0.0
+            direction_of = total_reached
+
+            # Expected sales by today if you were exactly on track
+            expected_so_far = 0.0
+            if approved_target > 0 and total_days > 0 and days_passed > 0:
+                expected_so_far = approved_target * (days_passed / total_days)
+
+            # Compare actual progress against expected progress
+            if expected_so_far > 0:
+                direction_vs_target_pct = (direction_of / expected_so_far) * 100.0
+                diff_vs_target_pct = direction_vs_target_pct - 100.0
             else:
-                with status_col:
-                    st.success("🟢 **Above target** – great progress!")
+                direction_vs_target_pct = 0.0
+                diff_vs_target_pct = 0.0
+
+            left_to_reach = max(approved_target - total_reached, 0.0)
+            avg_needed = left_to_reach / days_left if days_left > 0 else None
+            daily_target = approved_target / total_days if total_days > 0 else 0.0
+
+            st.markdown("---")
+
+            # High-level metrics
+            m1, m2, m3, m4 = st.columns(4)
+            with m1:
+                st.metric("Target", format_currency(approved_target))
+            with m2:
+                st.metric("Total days (month)", total_days)
+            with m3:
+                st.metric("Days passed", days_passed)
+            with m4:
+                st.metric("Days left", days_left)
+
+            st.markdown("### Progress Summary")
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                st.metric("Total reached", format_currency(total_reached))
+                st.metric("Average so far", format_currency(average_so_far))
+            with c2:
+                st.metric("Direction of", format_currency(direction_of))
+                st.metric("Expected sales so far", format_currency(expected_so_far))
+            with c3:
+                st.metric(
+                    "Direction vs target",
+                    f"{direction_vs_target_pct:.2f}%",
+                    f"{diff_vs_target_pct:+.2f}%",
+                )
+                st.metric("Left to reach", format_currency(left_to_reach))
+                if avg_needed is None:
+                    st.metric("Avg needed per day", "N/A")
+                else:
+                    st.metric("Avg needed per day", format_currency(avg_needed))
+                st.metric("Daily target", format_currency(daily_target))
+
+            # Traffic-light style status
+            if approved_target > 0:
+                st.markdown("---")
+                status_col = st.columns(1)[0]
+                if diff_vs_target_pct < -10:
+                    with status_col:
+                        st.error("🔴 **Below target** – consider increasing daily sales.")
+                elif diff_vs_target_pct <= 10:
+                    with status_col:
+                        st.warning("🟡 **Around target** – keep an eye on performance.")
+                else:
+                    with status_col:
+                        st.success("🟢 **Above target** – great progress!")
 
 if __name__ == "__main__":
     main()

@@ -598,9 +598,19 @@ class AirtableClient:
                 targets_dict = {k: float(v) for k, v in targets_dict.items()}
             except Exception:
                 targets_dict = {}
+            sales_str = fields.get("Staff Sales") or fields.get("staff_sales") or "{}"
+            try:
+                sales_dict = json.loads(sales_str) if sales_str else {}
+                sales_dict = {k: float(v) for k, v in sales_dict.items()}
+            except Exception:
+                sales_dict = {}
             if shop not in out:
                 out[shop] = {}
-            out[shop][date_str] = {"staff_working": staff_list, "staff_daily_targets": targets_dict}
+            out[shop][date_str] = {
+                "staff_working": staff_list,
+                "staff_daily_targets": targets_dict,
+                "staff_daily_sales": sales_dict,
+            }
         return out
 
     def save_daily_targets(self, base_id: str, table_name: str, targets: Dict[str, Dict[str, Dict[str, Any]]]) -> None:
@@ -628,10 +638,18 @@ class AirtableClient:
             for date_str, data in (dates or {}).items():
                 staff_working = (data or {}).get("staff_working") or []
                 staff_targets = (data or {}).get("staff_daily_targets") or {}
+                staff_sales = (data or {}).get("staff_daily_sales") or {}
                 staff_str = ", ".join(staff_working)
                 targets_str = json.dumps(staff_targets)
+                sales_str = json.dumps(staff_sales)
                 key = (shop_key, date_str)
-                fields = {"Shop": shop_key, "Date": date_str, "Staff Working": staff_str, "Staff Targets": targets_str}
+                fields = {
+                    "Shop": shop_key,
+                    "Date": date_str,
+                    "Staff Working": staff_str,
+                    "Staff Targets": targets_str,
+                    "Staff Sales": sales_str,
+                }
                 if key in by_key:
                     to_update.append({"id": by_key[key]["id"], "fields": fields})
                 else:
