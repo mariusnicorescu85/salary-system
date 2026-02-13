@@ -1,11 +1,12 @@
 """
 Airtable Client
-Handles appending data to Airtable
+Handles appending data to Airtable and persisting targets/adjustments for Streamlit Cloud.
 """
 
 from pyairtable import Api
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Any
 import os
+import json
 
 
 class AirtableClient:
@@ -501,3 +502,230 @@ class AirtableClient:
         else:
             # Append all records (original behavior)
             return self.append_records(base_id, table_name, breakdown_data)
+
+    # --- Persistence for Streamlit Cloud: shop targets, daily targets, monthly adjustments ---
+
+    def get_shop_targets(self, base_id: str, table_name: str) -> Dict[str, Dict[str, Dict[str, Any]]]:
+        """
+        Load shop targets from Airtable. Table must have: Shop, Month, Approved Target.
+        Optional: Total Reached. Returns { shop_key: { "YYYY-MM": { "approved_target": float, "total_reached": float } } }.
+        """
+        table = self.api.table(base_id, table_name)
+        try:
+            rows = table.all()
+        except Exception:
+            return {}
+        out = {}
+        for rec in rows:
+            fields = rec.get("fields", {})
+            shop = fields.get("Shop") or fields.get("shop")
+            month = fields.get("Month") or fields.get("month")
+            val = fields.get("Approved Target") or fields.get("approved_target") or 0
+            total_reached = fields.get("Total Reached") or fields.get("total_reached") or 0
+            if shop and month:
+                if shop not in out:
+                    out[shop] = {}
+                out[shop][str(month)] = {
+                    "approved_target": float(val),
+                    "total_reached": float(total_reached),
+                }
+        return out
+
+    def save_shop_targets(self, base_id: str, table_name: str, targets: Dict[str, Dict[str, Dict[str, Any]]]) -> None:
+        """
+        Save shop targets to Airtable. Table must have: Shop, Month, Approved Target.
+        Optional: Total Reached. Upserts by (Shop, Month).
+        """
+        table = self.api.table(base_id, table_name)
+        try:
+            existing = table.all()
+        except Exception:
+            existing = []
+        by_key = {
+            (r["fields"].get("Shop") or r["fields"].get("shop"), str(r["fields"].get("Month") or r["fields"].get("month") or "")): r
+            for r in existing
+            if (r["fields"].get("Shop") or r["fields"].get("shop")) and (r["fields"].get("Month") or r["fields"].get("month"))
+        }
+        to_update = []
+        to_create = []
+        for shop_key, months in (targets or {}).items():
+            for month_key, data in (months or {}).items():
+                approved = float((data or {}).get("approved_target") or 0)
+                total_reached = float((data or {}).get("total_reached") or 0)
+                if approved <= 0 and total_reached <= 0:
+                    continue
+                key = (shop_key, str(month_key))
+                fields = {"Shop": shop_key, "Month": str(month_key), "Approved Target": approved, "Total Reached": total_reached}
+                if key in by_key:
+                    to_update.append({"id": by_key[key]["id"], "fields": fields})
+                else:
+                    to_create.append(fields)
+        for i in range(0, len(to_update), 10):
+            table.batch_update(to_update[i : i + 10])
+        for i in range(0, len(to_create), 10):
+            table.batch_create(to_create[i : i + 10])
+
+    def get_daily_targets(self, base_id: str, table_name: str) -> Dict[str, Dict[str, Dict[str, Any]]]:
+        """
+        Load daily targets from Airtable. Table must have: Shop, Date, Staff Working, Staff Targets.
+        Staff Working = comma-separated names; Staff Targets = JSON object string.
+        Returns same shape as load_daily_targets(): { shop: { "YYYY-MM-DD": { staff_working: [], staff_daily_targets: {} } } }.
+        """
+        table = self.api.table(base_id, table_name)
+        try:
+            rows = table.all()
+        except Exception:
+            return {}
+        out = {}
+        for rec in rows:
+            fields = rec.get("fields", {})
+            shop = fields.get("Shop") or fields.get("shop")
+            date_str = fields.get("Date") or fields.get("date")
+            if isinstance(date_str, str) and len(date_str) >= 10:
+                date_str = date_str[:10]
+            else:
+                date_str = str(date_str)[:10] if date_str else ""
+            staff_str = fields.get("Staff Working") or fields.get("staff_working") or ""
+            targets_str = fields.get("Staff Targets") or fields.get("staff_targets") or "{}"
+            if not shop or not date_str:
+                continue
+            try:
+                staff_list = [s.strip() for s in staff_str.split(",") if s.strip()]
+            except Exception:
+                staff_list = []
+            try:
+                targets_dict = json.loads(targets_str) if targets_str else {}
+                targets_dict = {k: float(v) for k, v in targets_dict.items()}
+            except Exception:
+                targets_dict = {}
+            if shop not in out:
+                out[shop] = {}
+            out[shop][date_str] = {"staff_working": staff_list, "staff_daily_targets": targets_dict}
+        return out
+
+    def save_daily_targets(self, base_id: str, table_name: str, targets: Dict[str, Dict[str, Dict[str, Any]]]) -> None:
+        """
+        Save daily targets to Airtable. Upserts by (Shop, Date).
+        """
+        table = self.api.table(base_id, table_name)
+        try:
+            existing = table.all()
+        except Exception:
+            existing = []
+        by_key = {}
+        for r in existing:
+            shop = r["fields"].get("Shop") or r["fields"].get("shop")
+            d = r["fields"].get("Date") or r["fields"].get("date")
+            if d and isinstance(d, str) and len(d) >= 10:
+                d = d[:10]
+            elif d:
+                d = str(d)[:10]
+            if shop and d:
+                by_key[(shop, d)] = r
+        to_update = []
+        to_create = []
+        for shop_key, dates in (targets or {}).items():
+            for date_str, data in (dates or {}).items():
+                staff_working = (data or {}).get("staff_working") or []
+                staff_targets = (data or {}).get("staff_daily_targets") or {}
+                staff_str = ", ".join(staff_working)
+                targets_str = json.dumps(staff_targets)
+                key = (shop_key, date_str)
+                fields = {"Shop": shop_key, "Date": date_str, "Staff Working": staff_str, "Staff Targets": targets_str}
+                if key in by_key:
+                    to_update.append({"id": by_key[key]["id"], "fields": fields})
+                else:
+                    to_create.append(fields)
+        for i in range(0, len(to_update), 10):
+            table.batch_update(to_update[i : i + 10])
+        for i in range(0, len(to_create), 10):
+            table.batch_create(to_create[i : i + 10])
+
+    def get_monthly_adjustments(
+        self, base_id: str, table_name: str, shop_key: str, year: int, month: int
+    ) -> Dict[str, Dict[str, Any]]:
+        """
+        Load monthly adjustments from Airtable. Table must have: Shop, Month, Employee, plus bonus/deduction fields.
+        Returns { employee_name: { dailySalesBonus: 0, ... } }.
+        """
+        table = self.api.table(base_id, table_name)
+        month_key = f"{year}-{month:02d}"
+        shop_esc = (shop_key or "").replace('\\', '\\\\').replace('"', '\\"')
+        month_esc = (month_key or "").replace('\\', '\\\\').replace('"', '\\"')
+        try:
+            rows = table.all(formula=f'AND({{Shop}} = "{shop_esc}", {{Month}} = "{month_esc}")')
+        except Exception:
+            return {}
+        out = {}
+        for rec in rows:
+            fields = rec.get("fields", {})
+            emp = fields.get("Employee") or fields.get("employee")
+            if not emp:
+                continue
+            out[emp] = {
+                "dailySalesBonus": fields.get("Daily Sales Bonus") or fields.get("dailySalesBonus") or 0,
+                "firstLastHourBonus": fields.get("First Last Hour Bonus") or fields.get("firstLastHourBonus") or 0,
+                "socialMediaBonus": fields.get("Social Media Bonus") or fields.get("socialMediaBonus") or 0,
+                "managementBonus": fields.get("Management Bonus") or fields.get("managementBonus") or 0,
+                "managementConsistencyBonus": fields.get("Management Consistency Bonus") or fields.get("managementConsistencyBonus") or 0,
+                "transportFuel": fields.get("Transport Fuel") or fields.get("transportFuel") or 0,
+                "personalSalesBonus": fields.get("Personal Sales Bonus") or fields.get("personalSalesBonus") or 0,
+                "extraBonus": fields.get("Extra Bonus") or fields.get("extraBonus") or 0,
+                "dailyAllowance": fields.get("Daily Allowance") or fields.get("dailyAllowance") or 0,
+                "manualHours": fields.get("Manual Hours") or fields.get("manualHours") or 0,
+                "deductions": fields.get("Deductions") or fields.get("deductions") or 0,
+                "rent": fields.get("Rent") or fields.get("rent") or 0,
+                "advance": fields.get("Advance") or fields.get("advance") or 0,
+            }
+        return out
+
+    def save_monthly_adjustments(
+        self,
+        base_id: str,
+        table_name: str,
+        shop_key: str,
+        year: int,
+        month: int,
+        adjustments: Dict[str, Dict[str, Any]],
+    ) -> None:
+        """
+        Save monthly adjustments to Airtable. Upserts by (Shop, Month, Employee).
+        """
+        table = self.api.table(base_id, table_name)
+        month_key = f"{year}-{month:02d}"
+        shop_esc = (shop_key or "").replace('\\', '\\\\').replace('"', '\\"')
+        month_esc = (month_key or "").replace('\\', '\\\\').replace('"', '\\"')
+        try:
+            existing = table.all(formula=f'AND({{Shop}} = "{shop_esc}", {{Month}} = "{month_esc}")')
+        except Exception:
+            existing = []
+        by_emp = {r["fields"].get("Employee") or r["fields"].get("employee"): r for r in existing}
+        to_update = []
+        to_create = []
+        for emp, data in (adjustments or {}).items():
+            fields = {
+                "Shop": shop_key,
+                "Month": month_key,
+                "Employee": emp,
+                "Daily Sales Bonus": data.get("dailySalesBonus", 0),
+                "First Last Hour Bonus": data.get("firstLastHourBonus", 0),
+                "Social Media Bonus": data.get("socialMediaBonus", 0),
+                "Management Bonus": data.get("managementBonus", 0),
+                "Management Consistency Bonus": data.get("managementConsistencyBonus", 0),
+                "Transport Fuel": data.get("transportFuel", 0),
+                "Personal Sales Bonus": data.get("personalSalesBonus", 0),
+                "Extra Bonus": data.get("extraBonus", 0),
+                "Daily Allowance": data.get("dailyAllowance", 0),
+                "Manual Hours": data.get("manualHours", 0),
+                "Deductions": data.get("deductions", 0),
+                "Rent": data.get("rent", 0),
+                "Advance": data.get("advance", 0),
+            }
+            if emp in by_emp:
+                to_update.append({"id": by_emp[emp]["id"], "fields": fields})
+            else:
+                to_create.append(fields)
+        for i in range(0, len(to_update), 10):
+            table.batch_update(to_update[i : i + 10])
+        for i in range(0, len(to_create), 10):
+            table.batch_create(to_create[i : i + 10])

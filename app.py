@@ -109,9 +109,15 @@ def format_currency(value: float) -> str:
 
 def load_monthly_adjustments(shop_key: str, year: int, month: int) -> Dict:
     """
-    Load monthly adjustments (bonuses, deductions, advances) for a specific month
-    Returns empty dict if file doesn't exist
+    Load monthly adjustments for a specific month (from Airtable if configured, else YAML).
     """
+    use_at, base_id, api_key, tables = _airtable_persistence()
+    if use_at and base_id and api_key and tables[2]:
+        try:
+            client = AirtableClient(api_key=api_key)
+            return client.get_monthly_adjustments(base_id, tables[2], shop_key, year, month)
+        except Exception as e:
+            logger.warning("Airtable load_monthly_adjustments failed, falling back to file: %s", e)
     adjustments_path = Path(f"config/monthly_adjustments_{shop_key}_{year}-{month:02d}.yaml")
     if adjustments_path.exists():
         with open(adjustments_path, 'r') as f:
@@ -120,16 +126,62 @@ def load_monthly_adjustments(shop_key: str, year: int, month: int) -> Dict:
 
 
 def save_monthly_adjustments(shop_key: str, year: int, month: int, adjustments: Dict):
-    """Save monthly adjustments to YAML file"""
+    """Save monthly adjustments (to Airtable if configured, else YAML)."""
+    use_at, base_id, api_key, tables = _airtable_persistence()
+    if use_at and base_id and api_key and tables[2]:
+        try:
+            client = AirtableClient(api_key=api_key)
+            client.save_monthly_adjustments(base_id, tables[2], shop_key, year, month, adjustments)
+            return
+        except Exception as e:
+            logger.warning("Airtable save_monthly_adjustments failed, falling back to file: %s", e)
     adjustments_path = Path(f"config/monthly_adjustments_{shop_key}_{year}-{month:02d}.yaml")
     adjustments_path.parent.mkdir(parents=True, exist_ok=True)
     with open(adjustments_path, 'w') as f:
         yaml.dump(adjustments, f, default_flow_style=False, sort_keys=False)
 
 
-@st.cache_data
+def _airtable_persistence():
+    """
+    If Airtable persistence is enabled (e.g. on Streamlit Cloud), return (True, base_id, api_key, tables).
+    Tables: (shop_targets_table, daily_targets_table, monthly_adjustments_table).
+    Otherwise return (False, None, None, (None, None, None)).
+    """
+    try:
+        if hasattr(st, "secrets") and "airtable" in st.secrets:
+            at = st.secrets["airtable"]
+            api_key = at.get("api_key") or at.get("API_KEY") or os.getenv("AIRTABLE_API_KEY")
+            persist = at.get("persist_targets") or os.getenv("PERSIST_TARGETS_TO_AIRTABLE", "").lower() in ("1", "true", "yes")
+            if not (api_key and persist):
+                return False, None, None, (None, None, None)
+            base_id = at.get("persist_base_id") or at.get("base_id")
+            if not base_id and hasattr(st, "session_state"):
+                config = load_config()
+                if config and config.get("shops"):
+                    first_shop = list(config["shops"].values())[0]
+                    base_id = first_shop.get("airtable_base_id")
+            if not base_id:
+                return False, None, None, (None, None, None)
+            tables = (
+                at.get("shop_targets_table") or "Shop Targets",
+                at.get("daily_targets_table") or "Daily Targets",
+                at.get("monthly_adjustments_table") or "Monthly Adjustments",
+            )
+            return True, base_id, api_key, tables
+    except Exception:
+        pass
+    return False, None, None, (None, None, None)
+
+
 def load_shop_targets() -> Dict:
-    """Load saved monthly sales targets per shop."""
+    """Load saved monthly sales targets per shop (from Airtable if configured, else YAML)."""
+    use_at, base_id, api_key, tables = _airtable_persistence()
+    if use_at and base_id and api_key and tables[0]:
+        try:
+            client = AirtableClient(api_key=api_key)
+            return client.get_shop_targets(base_id, tables[0])
+        except Exception as e:
+            logger.warning("Airtable load_shop_targets failed, falling back to file: %s", e)
     path = Path("config/shop_targets.yaml")
     if not path.exists():
         return {}
@@ -138,15 +190,22 @@ def load_shop_targets() -> Dict:
 
 
 def save_shop_targets(targets: Dict):
-    """Persist monthly sales targets per shop."""
+    """Persist monthly sales targets per shop (to Airtable if configured, else YAML)."""
+    use_at, base_id, api_key, tables = _airtable_persistence()
+    if use_at and base_id and api_key and tables[0]:
+        try:
+            client = AirtableClient(api_key=api_key)
+            client.save_shop_targets(base_id, tables[0], targets)
+            return
+        except Exception as e:
+            logger.warning("Airtable save_shop_targets failed, falling back to file: %s", e)
     path = Path("config/shop_targets.yaml")
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w") as f:
         yaml.dump(targets, f, default_flow_style=False, sort_keys=False)
 
 
-def load_daily_targets() -> Dict:
-    """Load saved daily targets per shop. Per date: { staff_working: [...], staff_daily_targets: { name: float } }."""
+def _load_daily_targets_from_file() -> Dict:
     path = Path("config/daily_targets.yaml")
     if not path.exists():
         return {}
@@ -160,7 +219,6 @@ def load_daily_targets() -> Dict:
                 staff_targets = val.get("staff_daily_targets")
                 if not isinstance(staff_targets, dict):
                     staff_targets = {}
-                # Legacy: single daily_target stored as shop total; keep staff_daily_targets only
                 out[shop_key][date_str] = {
                     "staff_working": val.get("staff_working") or [],
                     "staff_daily_targets": {k: float(v) for k, v in staff_targets.items()},
@@ -170,8 +228,28 @@ def load_daily_targets() -> Dict:
     return out
 
 
+def load_daily_targets() -> Dict:
+    """Load saved daily targets per shop (from Airtable if configured, else YAML)."""
+    use_at, base_id, api_key, tables = _airtable_persistence()
+    if use_at and base_id and api_key and tables[1]:
+        try:
+            client = AirtableClient(api_key=api_key)
+            return client.get_daily_targets(base_id, tables[1])
+        except Exception as e:
+            logger.warning("Airtable load_daily_targets failed, falling back to file: %s", e)
+    return _load_daily_targets_from_file()
+
+
 def save_daily_targets(targets: Dict):
-    """Persist daily targets per shop (staff_working + staff_daily_targets per date)."""
+    """Persist daily targets per shop (to Airtable if configured, else YAML)."""
+    use_at, base_id, api_key, tables = _airtable_persistence()
+    if use_at and base_id and api_key and tables[1]:
+        try:
+            client = AirtableClient(api_key=api_key)
+            client.save_daily_targets(base_id, tables[1], targets)
+            return
+        except Exception as e:
+            logger.warning("Airtable save_daily_targets failed, falling back to file: %s", e)
     path = Path("config/daily_targets.yaml")
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w") as f:
@@ -1708,6 +1786,8 @@ Table Name: {repr(table_name)} (type: {type(table_name).__name__})
 
         # --- Daily target rubric: manager sets who is working and per-staff daily target per day ---
         st.markdown("---")
+        if "_daily_target_saved_toast" in st.session_state:
+            st.toast(st.session_state.pop("_daily_target_saved_toast"), icon="✅")
         st.subheader("📋 Daily target (manager)")
         st.caption("Set who is working each day and each staff member’s individual sales target for that day.")
         shop_key_tracker = st.session_state.get("selected_shop", list(load_config().get("shops", {}).keys())[0])
@@ -1769,7 +1849,7 @@ Table Name: {repr(table_name)} (type: {type(table_name).__name__})
             }
             save_daily_targets(daily_targets_config)
             total = sum(staff_daily_targets_submitted.values())
-            st.success(f"Saved for {date_str}: {len(staff_working_submitted)} staff, total target £{total:,.2f}")
+            st.session_state["_daily_target_saved_toast"] = f"Daily target saved for {date_str} (£{total:,.2f})"
             st.rerun()
 
         # Show today's manager-set daily targets (per staff and total)
@@ -1786,6 +1866,38 @@ Table Name: {repr(table_name)} (type: {type(table_name).__name__})
                     st.metric("Total daily target", format_currency(sum(today_targets.values())))
                 if today_staff and not today_targets:
                     st.write("**Staff working:**", ", ".join(today_staff))
+
+        # Pre-fill from stored targets BEFORE the form (cannot modify widget-bound session state after widget is created)
+        shop_key = st.session_state.get("selected_shop", list(load_config().get("shops", {}).keys())[0])
+        current_date_pre = st.session_state.get("target_current_date", datetime.today().date())
+        year_pre, month_pre = current_date_pre.year, current_date_pre.month
+        month_key_pre = f"{year_pre}-{month_pre:02d}"
+        current_shop_month = (shop_key, month_key_pre)
+        targets_config_pre = load_shop_targets()
+        stored_target_pre = (
+            targets_config_pre.get(shop_key, {}).get(month_key_pre, {}).get("approved_target")
+        )
+        stored_total_reached_pre = (
+            targets_config_pre.get(shop_key, {}).get(month_key_pre, {}).get("total_reached")
+        )
+        # When shop or month changes, reload from storage so we don't show another shop's values
+        last_loaded_shop_month = st.session_state.get("_target_shop_month")
+        if last_loaded_shop_month != current_shop_month:
+            st.session_state.target_approved = float(stored_target_pre or 0)
+            st.session_state.target_total_reached = float(stored_total_reached_pre or 0)
+            st.session_state["_target_shop_month"] = current_shop_month
+        else:
+            # Same shop/month - only pre-fill if empty
+            if (
+                float(st.session_state.get("target_approved", 0.0)) == 0.0
+                and stored_target_pre
+            ):
+                st.session_state.target_approved = float(stored_target_pre)
+            if (
+                float(st.session_state.get("target_total_reached", 0.0)) == 0.0
+                and stored_total_reached_pre
+            ):
+                st.session_state.target_total_reached = float(stored_total_reached_pre)
 
         # Use a form so that pressing Enter submits ONLY this section
         with st.form("sales_target_tracker_form", clear_on_submit=False):
@@ -1812,7 +1924,7 @@ Table Name: {repr(table_name)} (type: {type(table_name).__name__})
                     key="target_current_date",
                 )
 
-            st.form_submit_button("Update calculations")
+            sales_target_form_submitted = st.form_submit_button("Update calculations")
 
         # Read current values from session state for calculations
         approved_target = float(st.session_state.get("target_approved", 0.0))
@@ -1826,7 +1938,7 @@ Table Name: {repr(table_name)} (type: {type(table_name).__name__})
         month = current_date.month
         month_key = f"{year}-{month:02d}"
 
-        # If we have a stored target and the current value is zero, pre-fill from storage
+        # Pre-fill is done before the form; use approved_target from session state (already set above)
         stored_target = (
             targets_config.get(shop_key, {})
             .get(month_key, {})
@@ -1834,16 +1946,17 @@ Table Name: {repr(table_name)} (type: {type(table_name).__name__})
         )
         if approved_target == 0.0 and stored_target:
             approved_target = float(stored_target)
-            st.session_state.target_approved = approved_target
-        else:
-            # Persist non-zero targets automatically
-            if approved_target > 0:
-                if shop_key not in targets_config:
-                    targets_config[shop_key] = {}
-                if month_key not in targets_config[shop_key]:
-                    targets_config[shop_key][month_key] = {}
-                targets_config[shop_key][month_key]["approved_target"] = float(approved_target)
-                save_shop_targets(targets_config)
+        if approved_target > 0 or total_reached > 0:
+            # Persist targets and total reached
+            if shop_key not in targets_config:
+                targets_config[shop_key] = {}
+            if month_key not in targets_config[shop_key]:
+                targets_config[shop_key][month_key] = {}
+            targets_config[shop_key][month_key]["approved_target"] = float(approved_target)
+            targets_config[shop_key][month_key]["total_reached"] = float(total_reached)
+            save_shop_targets(targets_config)
+            if sales_target_form_submitted:
+                st.toast(f"Shop target updated (£{approved_target:,.2f} for {month_key})", icon="✅")
 
         # Core calculations
         total_days = calendar.monthrange(year, month)[1]

@@ -69,6 +69,11 @@ A comprehensive dashboard system for calculating employee salaries across multip
    - Edit `config/shops.yaml` to set Google Drive folder IDs and Airtable base IDs
    - Edit `config/employees_pyt.yaml`, `config/employees_silverburn.yaml`, and `config/employees_opatra.yaml` to configure employee payment conditions
 
+7. **Email (sending salary breakdowns)** (optional):
+   - In **Results** → **Email** you can send breakdowns to an employee or to management.
+   - Add SMTP credentials to `.streamlit/secrets.toml` using one section per shop: `[email_pyt]`, `[email_silverburn]`, `[email_opatra]`. Each needs `SMTP_USER` and `SMTP_PASSWORD` (for Gmail use an [App Password](https://myaccount.google.com/apppasswords)).
+   - Copy from `.streamlit/secrets.toml.example` (see the Email section at the bottom). For **Streamlit Cloud**, see **STREAMLIT_CLOUD_SECRETS.md** for where to paste secrets and the full template.
+
 ## Usage
 
 1. **Start the dashboard**:
@@ -192,7 +197,7 @@ This application can be deployed to various cloud platforms. See `DEPLOYMENT.md`
 **Recommended:** Streamlit Cloud (free, easy setup)
 - Push to GitHub
 - Deploy at [share.streamlit.io](https://share.streamlit.io)
-- See `DEPLOY_STREAMLIT_CLOUD.md` for step-by-step guide
+- Configure secrets (auth, Airtable, **email**) in the app’s **Settings → Secrets**. See **STREAMLIT_CLOUD_SECRETS.md** for the full template and Gmail App Password setup.
 
 **Note:** Vercel is NOT recommended for Streamlit apps. See `VERCEL_WARNING.md` for details.
 
