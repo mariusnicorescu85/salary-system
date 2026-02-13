@@ -325,6 +325,17 @@ class AirtableClient:
                 'message': 'No records found to update.'
             }
         
+        # Deduplicate by record ID - Airtable rejects "update same record multiple times in one request"
+        seen_ids = set()
+        deduped_batch = []
+        for rec in reversed(update_batch):
+            rec_id = rec['id']
+            if rec_id not in seen_ids:
+                seen_ids.add(rec_id)
+                deduped_batch.append(rec)
+        deduped_batch.reverse()
+        update_batch = deduped_batch
+        
         # Batch update records (Airtable allows up to 10 records per batch)
         results = []
         batch_size = 10

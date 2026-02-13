@@ -110,19 +110,30 @@ def format_currency(value: float) -> str:
 def load_monthly_adjustments(shop_key: str, year: int, month: int) -> Dict:
     """
     Load monthly adjustments for a specific month (from Airtable if configured, else YAML).
+    Falls back to YAML when Airtable returns empty, so local YAML overrides empty Airtable.
     """
+    def _load_from_yaml() -> Dict:
+        adjustments_path = Path(f"config/monthly_adjustments_{shop_key}_{year}-{month:02d}.yaml")
+        if adjustments_path.exists():
+            with open(adjustments_path, 'r') as f:
+                return yaml.safe_load(f) or {}
+        return {}
+
     use_at, base_id, api_key, tables = _airtable_persistence()
     if use_at and base_id and api_key and tables[2]:
         try:
             client = AirtableClient(api_key=api_key)
-            return client.get_monthly_adjustments(base_id, tables[2], shop_key, year, month)
+            at_result = client.get_monthly_adjustments(base_id, tables[2], shop_key, year, month)
+            # Fall back to YAML when Airtable returns empty (e.g. no Monthly Adjustments table data yet)
+            if at_result:
+                return at_result
+            yaml_data = _load_from_yaml()
+            if yaml_data:
+                logger.info("Airtable monthly adjustments empty, using YAML file")
+            return yaml_data
         except Exception as e:
             logger.warning("Airtable load_monthly_adjustments failed, falling back to file: %s", e)
-    adjustments_path = Path(f"config/monthly_adjustments_{shop_key}_{year}-{month:02d}.yaml")
-    if adjustments_path.exists():
-        with open(adjustments_path, 'r') as f:
-            return yaml.safe_load(f) or {}
-    return {}
+    return _load_from_yaml()
 
 
 def save_monthly_adjustments(shop_key: str, year: int, month: int, adjustments: Dict):
@@ -780,34 +791,42 @@ def main():
                     st.success(f"✅ Parsed {len(records)} valid records")
                     
                     # Load monthly adjustments if available
-                    # Try to detect month from records
+                    # Use most common month from records (more reliable than first record)
                     month_adjustments = {}
                     if records:
                         try:
-                            first_date = datetime.strptime(records[0]['Date'], '%Y-%m-%d')
-                            year = first_date.year
-                            month = first_date.month
-                            month_adjustments = load_monthly_adjustments(selected_shop, year, month)
-                            
-                            # Merge monthly adjustments with base bonuses
-                            if month_adjustments:
-                                # Deep merge: monthly adjustments override base bonuses
-                                merged_bonuses = bonuses.copy()
-                                for emp_name, emp_adjustments in month_adjustments.items():
-                                    if emp_name in merged_bonuses:
-                                        merged_bonuses[emp_name].update(emp_adjustments)
-                                    else:
-                                        merged_bonuses[emp_name] = emp_adjustments
-                                bonuses = merged_bonuses
+                            from collections import Counter
+                            months = [datetime.strptime(r['Date'], '%Y-%m-%d') for r in records if r.get('Date')]
+                            if months:
+                                (year, month), _ = Counter((m.year, m.month) for m in months).most_common(1)[0]
+                                month_key = f"{year}-{month:02d}"
+                                month_adjustments = load_monthly_adjustments(selected_shop, year, month)
+                                logger.info("Monthly adjustments load: shop=%s, month=%s, count=%d", selected_shop, month_key, len(month_adjustments or {}))
                                 
-                                # Also update advance in employee config if specified in monthly adjustments
-                                for emp_name, emp_adjustments in month_adjustments.items():
-                                    if 'advance' in emp_adjustments and emp_name in employees:
-                                        employees[emp_name]['advance'] = emp_adjustments['advance']
-                                
-                                st.info(f"📅 Loaded monthly adjustments for {first_date.strftime('%B %Y')}")
+                                # Merge monthly adjustments with base bonuses (case-insensitive employee match)
+                                if month_adjustments:
+                                    merged_bonuses = bonuses.copy()
+                                    employees_lower_map = {e.lower(): e for e in employees.keys()}
+                                    for emp_from_at, emp_adjustments in month_adjustments.items():
+                                        # Match employee (Airtable may have different casing)
+                                        emp_key = employees_lower_map.get((emp_from_at or '').lower())
+                                        if emp_key:
+                                            merged_bonuses[emp_key].update(emp_adjustments)
+                                        else:
+                                            merged_bonuses[emp_from_at] = emp_adjustments
+                                    bonuses = merged_bonuses
+                                    
+                                    for emp_from_at, emp_adjustments in month_adjustments.items():
+                                        emp_key = employees_lower_map.get((emp_from_at or '').lower())
+                                        if emp_key and 'advance' in emp_adjustments and emp_key in employees:
+                                            employees[emp_key]['advance'] = emp_adjustments['advance']
+                                    
+                                    st.info(f"📅 Loaded monthly adjustments for {datetime(year, month, 1).strftime('%B %Y')} ({len(month_adjustments)} employee(s))")
+                                else:
+                                    st.warning(f"⚠️ No monthly adjustments found for {datetime(year, month, 1).strftime('%B %Y')}. Check the **Monthly Adjustments** table in Airtable has a row with **Shop** = `{selected_shop}` and **Month** = `{month_key}`.")
                         except Exception as e:
                             logger.warning(f"Could not load monthly adjustments: {e}")
+                            st.warning(f"⚠️ Could not load monthly adjustments: {e}")
                     
                     # Initialize calculation engine
                     engine = CalculationEngine(employees, bonuses)
@@ -989,6 +1008,14 @@ def main():
                             'PaymentType': summary.get('PaymentType', '')
                         })
                     
+                    # Sort: Daily records first (by Date, then Employee), then Monthly Summary (by Employee)
+                    def _sort_key(r):
+                        rt = r.get('RecordType', '')
+                        if rt == 'Daily':
+                            return (0, r.get('Date', ''), r.get('Employee', ''))
+                        return (1, '', r.get('Employee', ''))
+                    airtable_records.sort(key=_sort_key)
+                    
                     st.session_state.airtable_records = airtable_records
                     st.session_state.airtable_summaries = {emp: data['summary'] for emp, data in results.items()}
                     
@@ -1013,90 +1040,96 @@ def main():
                             st.write(f"**Zero calculations:** {len(zero_calc_employees)} - {', '.join(zero_calc_employees)}")
                         if unprocessed:
                             st.write(f"**Not processed:** {len(unprocessed)} - {', '.join(sorted(unprocessed))}")
-                    
-                    # Show Airtable preview if enabled
-                    if append_to_airtable:
-                        st.markdown("---")
-                        st.subheader("📤 Quick Airtable Export")
-                        st.info("💡 For detailed preview and export, go to the **'Airtable Preview'** tab")
-                        
-                        # Show configuration
-                        base_id = shop_config.get('airtable_base_id')
-                        table_name = shop_config.get('airtable_table_name')
-                        
-                        if base_id and table_name and airtable_api_key:
-                            col1, col2 = st.columns(2)
-                            with col1:
-                                st.write(f"**Base ID:** {base_id}")
-                            with col2:
-                                st.write(f"**Table:** {table_name}")
-                            
-                            # Export mode selection
-                            export_mode = st.radio(
-                                "📤 Export Mode",
-                                ["Skip duplicates (append only new)", "Update existing records", "Upsert (update existing + create new)"],
-                                index=0,
-                                help="""
-                                - **Skip duplicates**: Only append new records, skip existing ones (prevents duplicates)
-                                - **Update existing**: Only update records that already exist, don't create new ones
-                                - **Upsert**: Update existing records AND create new ones (recommended for re-runs after adjustments)
-                                """,
-                                key="export_mode_calculate"
-                            )
-                            
-                            skip_duplicates = export_mode == "Skip duplicates (append only new)"
-                            update_existing = export_mode == "Update existing records"
-                            upsert_mode = export_mode == "Upsert (update existing + create new)"
-                            
-                            # Confirmation button
-                            if st.button("✅ Confirm & Append to Airtable", type="primary"):
-                                try:
-                                    with st.spinner("📤 Appending to Airtable..."):
-                                        airtable = AirtableClient(api_key=airtable_api_key)
-                                        result = airtable.append_daily_breakdown(
-                                            base_id,
-                                            table_name,
-                                            airtable_records,
-                                            skip_duplicates=skip_duplicates,
-                                            update_existing=update_existing,
-                                            upsert_mode=upsert_mode
-                                        )
-                                        
-                                        # Show results based on mode
-                                        if update_existing:
-                                            updated_count = result.get('records_updated', 0)
-                                            not_found = result.get('not_found', [])
-                                            st.success(f"✅ Successfully updated {updated_count} records in Airtable!")
-                                            if not_found:
-                                                st.warning(f"⚠️ {len(not_found)} records not found in Airtable (not created): {', '.join(not_found[:5])}{'...' if len(not_found) > 5 else ''}")
-                                        elif upsert_mode:
-                                            st.success(f"✅ Successfully updated {result.get('records_updated', 0)} records and created {result.get('records_created', 0)} new records!")
-                                        elif result.get('skipped', 0) > 0:
-                                            st.success(f"✅ Successfully appended {result['records_created']} new records to Airtable!")
-                                            st.info(f"⏭️ Skipped {result['skipped']} existing records (duplicates)")
-                                        else:
-                                            st.success(f"✅ Successfully appended {result['records_created']} records to Airtable!")
-                                        
-                                        if result.get('message'):
-                                            st.info(result['message'])
-                                        
-                                        st.balloons()
-                                except Exception as e:
-                                    st.error(f"❌ Error appending to Airtable: {str(e)}")
-                                    import traceback
-                                    with st.expander("🔍 Error Details"):
-                                        st.code(traceback.format_exc())
-                        else:
-                            if not airtable_api_key:
-                                st.warning("⚠️ Please enter your Airtable API key in the sidebar")
-                            if not base_id or not table_name:
-                                st.warning("⚠️ Please configure Base ID and Table name in config/shops.yaml")
                 
                 except Exception as e:
                     st.error(f"❌ Error: {str(e)}")
                     import traceback
                     with st.expander("🔍 Error Details"):
                         st.code(traceback.format_exc())
+        
+        # Airtable export section - shown when calculations done (persists across reruns so Confirm & Append works)
+        if st.session_state.calculations_done and append_to_airtable:
+            st.markdown("---")
+            st.subheader("📤 Quick Airtable Export")
+            st.info("💡 For detailed preview and export, go to the **'Airtable Preview'** tab")
+            
+            # Use shop config for the results (may differ from current sidebar selection)
+            export_shop_key = st.session_state.get('results_shop_key') or selected_shop
+            export_shop_config = config['shops'].get(export_shop_key, shop_config)
+            base_id = export_shop_config.get('airtable_base_id')
+            table_name = export_shop_config.get('airtable_table_name')
+            
+            if base_id and table_name and airtable_api_key:
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.write(f"**Base ID:** {base_id}")
+                with col2:
+                    st.write(f"**Table:** {table_name}")
+                
+                export_mode = st.radio(
+                    "📤 Export Mode",
+                    ["Skip duplicates (append only new)", "Update existing records", "Upsert (update existing + create new)"],
+                    index=0,
+                    help="""
+                    - **Skip duplicates**: Only append new records, skip existing ones (prevents duplicates)
+                    - **Update existing**: Only update records that already exist, don't create new ones
+                    - **Upsert**: Update existing records AND create new ones (recommended for re-runs after adjustments)
+                    """,
+                    key="export_mode_calculate"
+                )
+                
+                skip_duplicates = export_mode == "Skip duplicates (append only new)"
+                update_existing = export_mode == "Update existing records"
+                upsert_mode = export_mode == "Upsert (update existing + create new)"
+                
+                if st.button("✅ Confirm & Append to Airtable", type="primary"):
+                    airtable_records = st.session_state.get('airtable_records', [])
+                    if not airtable_records:
+                        st.error("❌ No records to export. Please run a calculation first.")
+                    else:
+                        try:
+                            with st.spinner("📤 Appending to Airtable..."):
+                                airtable = AirtableClient(api_key=airtable_api_key)
+                                result = airtable.append_daily_breakdown(
+                                    base_id,
+                                    table_name,
+                                    airtable_records,
+                                    skip_duplicates=skip_duplicates,
+                                    update_existing=update_existing,
+                                    upsert_mode=upsert_mode
+                                )
+                                
+                                if update_existing:
+                                    updated_count = result.get('records_updated', 0)
+                                    not_found = result.get('not_found', [])
+                                    st.success(f"✅ Successfully updated {updated_count} records in Airtable!")
+                                    if not_found:
+                                        st.warning(f"⚠️ {len(not_found)} records not found in Airtable (not created): {', '.join(not_found[:5])}{'...' if len(not_found) > 5 else ''}")
+                                elif upsert_mode:
+                                    st.success(f"✅ Successfully updated {result.get('records_updated', 0)} records and created {result.get('records_created', 0)} new records!")
+                                elif result.get('skipped', 0) > 0:
+                                    if result.get('records_created', 0) > 0:
+                                        st.success(f"✅ Successfully appended {result['records_created']} new records to Airtable!")
+                                        st.info(f"⏭️ Skipped {result['skipped']} existing records (duplicates)")
+                                    else:
+                                        st.info(f"⏭️ All {result['skipped']} records already exist in Airtable. No new records appended.")
+                                else:
+                                    st.success(f"✅ Successfully appended {result['records_created']} records to Airtable!")
+                                
+                                if result.get('message'):
+                                    st.info(result['message'])
+                                
+                                st.balloons()
+                        except Exception as e:
+                            st.error(f"❌ Error appending to Airtable: {str(e)}")
+                            import traceback
+                            with st.expander("🔍 Error Details"):
+                                st.code(traceback.format_exc())
+            else:
+                if not airtable_api_key:
+                    st.warning("⚠️ Please enter your Airtable API key in the sidebar")
+                if not base_id or not table_name:
+                    st.warning("⚠️ Please configure Base ID and Table name in config/shops.yaml")
     
     with tab2:
         st.header("📊 Calculation Results")
@@ -1211,8 +1244,50 @@ def main():
                     mime="text/csv"
                 )
                 
+                # Bulk send to all staff
+                st.subheader("📤 Send Breakdowns to All Staff")
+                staff_with_email = [
+                    (emp_name, employees_config.get(emp_name, {}).get('email', ''))
+                    for emp_name in results.keys()
+                ]
+                staff_with_email = [(n, e) for n, e in staff_with_email if e]
+                staff_without_email = [n for n in results.keys() if not (employees_config.get(n, {}).get('email', ''))]
+                if staff_without_email:
+                    st.caption(f"Employees without email in config (will be skipped): {', '.join(staff_without_email)}")
+                if st.button("Send to all staff (each gets their own breakdown)", key="send_all_staff"):
+                    if not staff_with_email:
+                        st.error("No employees have email addresses in the config. Add emails to config/employees_*.yaml.")
+                    elif not default_from_email:
+                        st.error("Please set from_email in config/shops.yaml under the shop's email section.")
+                    else:
+                        try:
+                            email_client = get_email_client_for_shop(results_shop_key)
+                        except ValueError as e:
+                            st.error(f"Email not configured: {e}")
+                        else:
+                            sent, failed = 0, 0
+                            for emp_name, emp_email in staff_with_email:
+                                emp_data = results[emp_name]
+                                html_content = email_client.create_breakdown_email(
+                                    emp_name, emp_data['summary'], emp_data['daily'], emp_email
+                                )
+                                subject = f"{current_shop_config.get('name', 'Shop')} - Salary Breakdown for {emp_name}"
+                                if email_client.send_email(
+                                    to_email=emp_email,
+                                    subject=subject,
+                                    html_content=html_content,
+                                    from_email=default_from_email,
+                                ):
+                                    sent += 1
+                                else:
+                                    failed += 1
+                            if sent > 0:
+                                st.success(f"Sent {sent} breakdown(s) to staff." + (f" {failed} failed." if failed else ""))
+                            else:
+                                st.error("Failed to send any emails. Check email configuration and server logs.")
+                
                 # Email breakdown to the selected employee
-                st.subheader("✉️ Email Breakdown to Employee")
+                st.subheader("✉️ Email Breakdown to Employee (single)")
                 employee_info = employees_config.get(selected_employee, {}) if isinstance(employees_config, dict) else {}
                 default_employee_email = employee_info.get('email', '')
                 from_email_input = st.text_input(
@@ -1257,8 +1332,8 @@ def main():
                             else:
                                 st.error("Failed to send email to employee. Check server logs for details.")
             
-            # Email all employee breakdowns to management
-            st.subheader("📨 Send All Breakdowns to Management")
+            # Email to management
+            st.subheader("📨 Send Breakdowns to Management (for Approval)")
             if not results:
                 st.info("No calculation results available to send.")
             else:
@@ -1274,50 +1349,82 @@ def main():
                 management_recipients_input = st.text_input(
                     "Management recipient emails (comma-separated)",
                     value=management_recipients_str,
-                    help="These addresses will receive a copy of each individual salary breakdown for this shop.",
+                    help="Management will receive the breakdowns for review and approval.",
                     key="management_recipients",
                 )
                 
-                if st.button("Send all employee breakdowns to management", key="send_management_emails"):
-                    recipients = [e.strip() for e in management_recipients_input.split(",") if e.strip()]
-                    if not recipients:
-                        st.error("Please provide at least one management recipient email.")
-                    elif not mgmt_from_email_input:
-                        st.error("Please provide a sender email address for management emails.")
-                    else:
-                        try:
-                            email_client = get_email_client_for_shop(results_shop_key)
-                        except ValueError as e:
-                            st.error(f"Email not configured: {e}")
+                col_mgmt1, col_mgmt2 = st.columns(2)
+                with col_mgmt1:
+                    if st.button("Send consolidated breakdown (one email for approval)", key="send_management_consolidated"):
+                        recipients = [e.strip() for e in management_recipients_input.split(",") if e.strip()]
+                        if not recipients:
+                            st.error("Please provide at least one management recipient email.")
+                        elif not mgmt_from_email_input:
+                            st.error("Please provide a sender email address for management emails.")
                         else:
-                            total_sent = 0
-                            total_attempts = 0
-                            for emp_name, emp_data in results.items():
-                                emp_summary = emp_data['summary']
-                                emp_daily = emp_data['daily']
-                                # Use employee email from config if available, otherwise blank
-                                emp_info = employees_config.get(emp_name, {}) if isinstance(employees_config, dict) else {}
-                                emp_email_addr = emp_info.get('email', '')
-                                html_content = email_client.create_breakdown_email(
-                                    emp_name,
-                                    emp_summary,
-                                    emp_daily,
-                                    emp_email_addr,
+                            try:
+                                email_client = get_email_client_for_shop(results_shop_key)
+                            except ValueError as e:
+                                st.error(f"Email not configured: {e}")
+                            else:
+                                html_content = email_client.create_management_approval_email(
+                                    shop_name=current_shop_config.get('name', 'Shop'),
+                                    results=results,
                                 )
-                                subject = f"{current_shop_config.get('name', 'Shop')} - Salary Breakdown for {emp_name}"
+                                subject = f"{current_shop_config.get('name', 'Shop')} - Salary Breakdowns for Approval"
+                                sent = 0
                                 for r in recipients:
-                                    total_attempts += 1
                                     if email_client.send_email(
                                         to_email=r,
                                         subject=subject,
                                         html_content=html_content,
                                         from_email=mgmt_from_email_input,
                                     ):
-                                        total_sent += 1
-                            if total_sent > 0:
-                                st.success(f"Sent {total_sent} management emails (out of {total_attempts} attempts).")
+                                        sent += 1
+                                if sent > 0:
+                                    st.success(f"Sent consolidated breakdown to {sent} management recipient(s).")
+                                else:
+                                    st.error("Failed to send email. Check email configuration and server logs.")
+                with col_mgmt2:
+                    if st.button("Send each breakdown separately (one email per employee)", key="send_management_emails"):
+                        recipients = [e.strip() for e in management_recipients_input.split(",") if e.strip()]
+                        if not recipients:
+                            st.error("Please provide at least one management recipient email.")
+                        elif not mgmt_from_email_input:
+                            st.error("Please provide a sender email address for management emails.")
+                        else:
+                            try:
+                                email_client = get_email_client_for_shop(results_shop_key)
+                            except ValueError as e:
+                                st.error(f"Email not configured: {e}")
                             else:
-                                st.error("Failed to send any management emails. Check email configuration and server logs.")
+                                total_sent = 0
+                                total_attempts = 0
+                                for emp_name, emp_data in results.items():
+                                    emp_summary = emp_data['summary']
+                                    emp_daily = emp_data['daily']
+                                    emp_info = employees_config.get(emp_name, {}) if isinstance(employees_config, dict) else {}
+                                    emp_email_addr = emp_info.get('email', '')
+                                    html_content = email_client.create_breakdown_email(
+                                        emp_name,
+                                        emp_summary,
+                                        emp_daily,
+                                        emp_email_addr,
+                                    )
+                                    subject = f"{current_shop_config.get('name', 'Shop')} - Salary Breakdown for {emp_name}"
+                                    for r in recipients:
+                                        total_attempts += 1
+                                        if email_client.send_email(
+                                            to_email=r,
+                                            subject=subject,
+                                            html_content=html_content,
+                                            from_email=mgmt_from_email_input,
+                                        ):
+                                            total_sent += 1
+                                if total_sent > 0:
+                                    st.success(f"Sent {total_sent} management emails (out of {total_attempts} attempts).")
+                                else:
+                                    st.error("Failed to send any management emails. Check email configuration and server logs.")
     
     with tab3:
         st.header("📤 Airtable Export Preview")
