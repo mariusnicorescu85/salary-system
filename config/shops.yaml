@@ -20,6 +20,7 @@ shops:
     email:
       # Sender and management inbox for Opatra
       from_email: "invoices.opulent@gmail.com"
+      invoice_submission_email: "invoices.opulent@gmail.com"  # Where staff send their PDF invoices
       management_recipients:
         - "invoices.opulent@gmail.com"
     

@@ -41,15 +41,20 @@ class EmailClient:
         return f"£{value:,.2f}"
     
     def create_breakdown_email(self, employee_name: str, summary: Dict, 
-                              daily_records: List[Dict], employee_email: str) -> str:
+                              daily_records: List[Dict], employee_email: str,
+                              shop_name: str = None, invoice_submission_email: str = None) -> str:
         """
-        Create HTML email with salary breakdown
+        Create HTML email with salary breakdown.
+        When shop_name is provided, uses Opatra-style template with gradient header,
+        Mirela signature, PDF invoice notice, and Total Before Advance / Advance / Remaining flow.
         
         Args:
             employee_name: Employee name
             summary: Monthly summary dictionary
             daily_records: List of daily calculation records
             employee_email: Employee email address
+            shop_name: Optional shop name (e.g. "Opatra") for styled template
+            invoice_submission_email: Where staff send PDF invoices (e.g. invoices.opulent@gmail.com)
             
         Returns:
             HTML email content
@@ -62,9 +67,17 @@ class EmailClient:
             try:
                 date_obj = datetime.strptime(daily_records[0]['Date'], '%Y-%m-%d')
                 month_name = date_obj.strftime('%B %Y')
-            except:
+            except Exception:
                 pass
         
+        # Use Opatra-style template when shop_name provided
+        if shop_name:
+            return self._create_opatra_style_email(
+                employee_name, summary, daily_records, bonus_breakdown,
+                month_name, shop_name, invoice_submission_email or ""
+            )
+        
+        # Legacy simple template
         html = f"""
         <!DOCTYPE html>
         <html>
@@ -109,25 +122,19 @@ class EmailClient:
                         <tr><th>Bonus Type</th><th class="currency">Amount</th></tr>
         """
         
-        # Add bonus breakdown rows
-        if bonus_breakdown.get('FirstLastHourBonus', 0) > 0:
-            html += f'<tr><td>First/Last Hour</td><td class="currency">{self.format_currency(bonus_breakdown["FirstLastHourBonus"])}</td></tr>'
-        if bonus_breakdown.get('ManagementBonus', 0) > 0:
-            html += f'<tr><td>Management Bonus</td><td class="currency">{self.format_currency(bonus_breakdown["ManagementBonus"])}</td></tr>'
-        if bonus_breakdown.get('ManagementConsistencyBonus', 0) > 0:
-            html += f'<tr><td>Management Consistency Bonus</td><td class="currency">{self.format_currency(bonus_breakdown["ManagementConsistencyBonus"])}</td></tr>'
-        if bonus_breakdown.get('TransportFuel', 0) > 0:
-            html += f'<tr><td>Transport/Fuel</td><td class="currency">{self.format_currency(bonus_breakdown["TransportFuel"])}</td></tr>'
-        if bonus_breakdown.get('DailySalesBonus', 0) > 0:
-            html += f'<tr><td>Daily Sales Bonus</td><td class="currency">{self.format_currency(bonus_breakdown["DailySalesBonus"])}</td></tr>'
-        if bonus_breakdown.get('SocialMediaBonus', 0) > 0:
-            html += f'<tr><td>Social Media Bonus</td><td class="currency">{self.format_currency(bonus_breakdown["SocialMediaBonus"])}</td></tr>'
-        if bonus_breakdown.get('PersonalSalesBonus', 0) > 0:
-            html += f'<tr><td>Personal Sales Bonus</td><td class="currency">{self.format_currency(bonus_breakdown["PersonalSalesBonus"])}</td></tr>'
-        if bonus_breakdown.get('ExtraBonus', 0) > 0:
-            html += f'<tr><td>Extra Bonus</td><td class="currency">{self.format_currency(bonus_breakdown["ExtraBonus"])}</td></tr>'
-        if bonus_breakdown.get('DailyAllowance', 0) > 0:
-            html += f'<tr><td>Daily Allowance</td><td class="currency">{self.format_currency(bonus_breakdown["DailyAllowance"])}</td></tr>'
+        for key, label in [
+            ('FirstLastHourBonus', 'First/Last Hour'),
+            ('ManagementBonus', 'Management Bonus'),
+            ('ManagementConsistencyBonus', 'Management Consistency Bonus'),
+            ('TransportFuel', 'Transport/Fuel'),
+            ('DailySalesBonus', 'Daily Sales Bonus'),
+            ('SocialMediaBonus', 'Social Media Bonus'),
+            ('PersonalSalesBonus', 'Personal Sales Bonus'),
+            ('ExtraBonus', 'Extra Bonus'),
+            ('DailyAllowance', 'Daily Allowance'),
+        ]:
+            if bonus_breakdown.get(key, 0) > 0:
+                html += f'<tr><td>{label}</td><td class="currency">{self.format_currency(bonus_breakdown[key])}</td></tr>'
         
         html += f"""
                         <tr class="total"><td>TOTAL BONUS</td><td class="currency">{self.format_currency(summary.get('TotalBonus', 0))}</td></tr>
@@ -171,7 +178,6 @@ class EmailClient:
                     </tr>
         """
         
-        # Add daily records
         for record in daily_records:
             html += f"""
                     <tr>
@@ -190,6 +196,197 @@ class EmailClient:
         </body>
         </html>
         """
+        
+        return html
+    
+    def _create_opatra_style_email(self, employee_name: str, summary: Dict,
+                                   daily_records: List[Dict], bonus_breakdown: Dict,
+                                   month_name: str, shop_name: str,
+                                   invoice_submission_email: str) -> str:
+        """Opatra-style email: gradient header, Mirela signature, PDF notice, advance flow."""
+        payment_type = summary.get('PaymentType', '') or ''
+        is_commission = payment_type in (
+            'commission_only', 'tiered_commission', 'progressive_tiered_commission',
+            'hybrid_daily_max', 'molly_commission'
+        )
+        
+        advance = abs(summary.get('Advance', 0) or 0)
+        final_pay = summary.get('FinalPayment', 0) or 0
+        total_before_advance = final_pay + advance
+        
+        hours_salary = summary.get('HoursSalary', 0) or 0
+        total_bonus = summary.get('TotalBonus', 0) or 0
+        total_commission = summary.get('TotalCommission', 0) or 0
+        hours_plus_bonus = hours_salary + total_bonus
+        
+        # Build bonus breakdown rows
+        bonus_detail_rows = ""
+        for key, label in [
+            ('DailySalesBonus', 'Daily Sales Bonus'),
+            ('FirstLastHourBonus', 'First/Last Hour Bonus'),
+            ('SocialMediaBonus', 'Social Media Bonus'),
+            ('ManagementBonus', 'Management Bonus'),
+            ('ManagementConsistencyBonus', 'Mgmt Consistency Bonus'),
+            ('TransportFuel', 'Transport/Fuel'),
+            ('PersonalSalesBonus', 'Personal Sales Bonus'),
+            ('ExtraBonus', 'Extra Bonus'),
+            ('DailyAllowance', 'Daily Allowance'),
+        ]:
+            if bonus_breakdown.get(key, 0) > 0:
+                bonus_detail_rows += f'<tr><td style="padding-left: 20px;"><em>{label}:</em></td><td class="amount">{self.format_currency(bonus_breakdown[key])}</td></tr>'
+        
+        if summary.get('ManualHours', 0) > 0:
+            bonus_detail_rows += f'<tr><td style="padding-left: 20px;"><em>Manual Hours:</em></td><td class="amount">{self.format_currency(summary.get("ManualHoursPay", 0))}</td></tr>'
+        
+        if bonus_detail_rows:
+            bonus_detail_rows += f'<tr style="background: #e8f5e8; font-weight: bold;"><td><strong>TOTAL BONUS:</strong></td><td class="amount">{self.format_currency(total_bonus)}</td></tr>'
+        
+        bonus_section_html = ""
+        if bonus_detail_rows:
+            bonus_section_html = f'<tr style="background: #f0f8ff; font-weight: bold; border-top: 2px solid #4caf50;"><td colspan="2" style="padding: 12px 8px;">🎁 BONUS BREAKDOWN</td></tr>{bonus_detail_rows}'
+        
+        # Deductions row
+        deductions = summary.get('Deductions', 0) or 0
+        deductions_html = ""
+        if deductions != 0:
+            deductions_html = f"""<tr style="background: #fff3e0; font-weight: bold; border-top: 2px solid #ff9800;">
+                <td colspan="2" style="padding: 12px 8px;">⚠️ DEDUCTIONS</td>
+            </tr>
+            <tr><td style="padding-left: 20px;"><em>Deductions:</em></td><td class="amount" style="color: #d32f2f;">-{self.format_currency(abs(deductions))}</td></tr>"""
+        
+        # Hours + Bonus or Commission + Bonus row (for Total Before Advance context)
+        if is_commission:
+            mid_row = f'<tr><td><strong>Total Commission:</strong></td><td class="amount">{self.format_currency(total_commission)}</td></tr>'
+        else:
+            mid_row = f'<tr><td><strong>Hours + Bonus:</strong></td><td class="amount">{self.format_currency(hours_plus_bonus)}</td></tr>' if total_bonus > 0 else ''
+        
+        # Daily table - hourly: Date, Hours, Sales, Daily Pay (Base); commission: Date, Hours, Sales, Addl Sales, Commission
+        if is_commission:
+            daily_rows = "".join(
+                f'<tr><td class="left">{r.get("Date", "")}</td><td>{r.get("Hours", 0):.2f}</td>'
+                f'<td>{self.format_currency(r.get("Sales", 0))}</td><td>{self.format_currency(r.get("AddlSales", 0))}</td>'
+                f'<td class="amount">{self.format_currency(r.get("Commission", 0))}</td></tr>'
+                for r in daily_records
+            )
+            daily_header = "<tr><th class=\"left\">Date</th><th>Hours</th><th>Sales</th><th>Addl Sales</th><th>Commission</th></tr>"
+            header_title = "Commission Breakdown"
+            commission_badge = '<span class="commission-badge">COMMISSION</span>'
+        else:
+            daily_rows = "".join(
+                f'<tr><td class="left">{r.get("Date", "")}</td><td>{r.get("Hours", 0):.2f}</td>'
+                f'<td>{self.format_currency(r.get("Sales", 0))}</td><td class="amount">{self.format_currency(r.get("Base", 0))}</td></tr>'
+                for r in daily_records
+            )
+            daily_header = "<tr><th class=\"left\">Date</th><th>Hours</th><th>Sales</th><th>Daily Pay</th></tr>"
+            header_title = "Breakdown Summary"
+            commission_badge = ""
+        
+        invoice_email = invoice_submission_email or "invoices.opulent@gmail.com"
+        
+        html = f"""
+<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Monthly Breakdown - {shop_name}</title>
+<style>
+  body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 800px; margin: 0 auto; }}
+  .header {{ background: linear-gradient(135deg,#ff6b6b 0%,#ff8e53 100%); color: #fff; padding: 20px; border-radius: 8px 8px 0 0; }}
+  .content {{ background: #f9f9f9; padding: 20px; }}
+  .summary-box {{ background: #fff; border-radius: 8px; padding: 15px; margin: 15px 0; box-shadow: 0 2px 4px rgba(0,0,0,0.08); }}
+  .highlight {{ background: #e8f5e8; padding: 10px; border-left: 4px solid #4caf50; margin: 10px 0; border-radius: 4px; }}
+  .footer {{ background: #f1f1f1; padding: 15px; text-align: center; border-radius: 0 0 8px 8px; font-size: 12px; color: #666; }}
+  .pdf-notice {{ background: #fff3cd; border: 2px solid #ffc107; padding: 15px; border-radius: 8px; margin: 15px 0; }}
+  .pdf-notice strong {{ color: #d32f2f; }}
+  table {{ width: 100%; border-collapse: collapse; margin: 12px 0; }}
+  th, td {{ padding: 8px; border-bottom: 1px solid #eee; text-align: center; }}
+  th {{ background: #f2f2f2; font-weight: bold; }}
+  .left {{ text-align: left; }}
+  .amount {{ font-weight: bold; color: #2e7d32; }}
+  .employee-name {{ font-size: 22px; margin: 0; }}
+  .month-title {{ font-size: 16px; margin: 5px 0 0 0; opacity: 0.9; }}
+  .commission-badge {{ display: inline-block; background: #ff6b6b; color: white; padding: 4px 8px; border-radius: 12px; font-size: 12px; margin-left: 10px; }}
+  .summary-box table td:first-child {{ text-align: left; }}
+</style></head>
+<body>
+  <p>Hi {employee_name},</p>
+  <p>
+    Please see below your breakdown, kindly send your invoice <strong>in PDF format</strong> as soon as possible.<br><br>
+    No chasing email will be sent, please be responsible.<br><br>
+    Many thanks,<br>
+    Mirela
+  </p>
+
+  <div class="header">
+    <h1 class="employee-name">{employee_name} – {header_title} {commission_badge}</h1>
+    <p class="month-title">{month_name} - {shop_name}</p>
+  </div>
+
+  <div class="content">
+    <div class="highlight">
+      <h3>💰 Your Total Payment (remaining after any advance): <span class="amount">{self.format_currency(final_pay)}</span></h3>
+    </div>
+
+    <div class="summary-box">
+      <h3>📊 Monthly Overview</h3>
+      <table>
+        <tr><td><strong>Days Worked:</strong></td><td class="amount">{summary.get('WorkedDays', 0)} days</td></tr>
+        <tr><td><strong>Total Hours:</strong></td><td class="amount">{summary.get('WorkedHours', 0):.2f} hours</td></tr>
+        <tr><td><strong>Hourly Rate:</strong></td><td class="amount">{self.format_currency(summary.get('RatePerHour', 0))}</td></tr>
+        <tr><td><strong>Hours Salary:</strong></td><td class="amount">{self.format_currency(hours_salary)}</td></tr>
+        {bonus_section_html}
+        {mid_row}
+        {deductions_html}
+        {f'<tr><td><strong>Total Before Advance (Invoice Amount):</strong></td><td class="amount">{self.format_currency(total_before_advance)}</td></tr><tr><td><strong>Advance Already Paid:</strong></td><td class="amount">- {self.format_currency(advance)}</td></tr>' if advance > 0 else ''}
+        <tr><td><strong>Remaining To Pay:</strong></td><td class="amount">{self.format_currency(final_pay)}</td></tr>
+      </table>
+    </div>
+
+    <div class="summary-box">
+      <h3>🛍️ Sales Performance</h3>
+      <table>
+        <tr><td><strong>Total Sales:</strong></td><td class="amount">{self.format_currency(summary.get('Sales', 0))}</td></tr>
+        <tr><td><strong>Additional Sales:</strong></td><td class="amount">{self.format_currency(summary.get('AddlSales', 0))}</td></tr>
+        <tr><td><strong>Adjusted Sales:</strong></td><td class="amount">{self.format_currency(summary.get('AdjustedSales', 0))}</td></tr>
+        <tr><td><strong>Average per Day:</strong></td><td class="amount">{self.format_currency(summary.get('AvgSalePerDay', 0))}</td></tr>
+      </table>
+    </div>
+
+    <div class="summary-box">
+      <h3>📅 Daily Breakdown</h3>
+      <table>
+        <thead>{daily_header}</thead>
+        <tbody>{daily_rows}</tbody>
+      </table>
+    </div>
+
+    <div class="pdf-notice">
+      <h3 style="margin-top: 0;">📄 IMPORTANT: Invoice Submission Requirements</h3>
+      <ul style="margin: 10px 0;">
+        <li><strong style="color: #d32f2f;">Your invoice MUST be submitted in PDF format</strong></li>
+        <li>Invoice amount: <strong>{self.format_currency(total_before_advance)}</strong> (Total Before Advance)</li>
+        <li>Send to: <strong>{invoice_email}</strong></li>
+        <li>Please ensure your invoice is a PDF file before sending</li>
+      </ul>
+    </div>
+
+    <div class="summary-box">
+      <h3>📝 Important Notes</h3>
+      <ul>
+        <li>This summary covers {month_name}.</li>
+        <li>Please issue your invoice for the <strong>Total Before Advance (Invoice Amount)</strong>.</li>
+        <li><strong>Invoice must be in PDF format</strong> when submitting to <strong>{invoice_email}</strong>.</li>
+        <li>Payment will be processed according to the usual schedule, after you submit the invoice.</li>
+        <li>If you have questions about your payment, please contact the Management Team before submitting the invoice.</li>
+      </ul>
+    </div>
+
+    <p>Thank you for your hard work and dedication! 🌟</p>
+  </div>
+
+  <div class="footer">
+    <p><strong>{shop_name}</strong></p>
+    <p><em>This is an automated breakdown summary. Please keep for your records.</em></p>
+  </div>
+</body></html>
+        """.strip()
         
         return html
     

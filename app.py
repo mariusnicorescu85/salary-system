@@ -1266,10 +1266,13 @@ def main():
                             st.error(f"Email not configured: {e}")
                         else:
                             sent, failed = 0, 0
+                            shop_name = current_shop_config.get('name', 'Shop')
+                            invoice_email = email_config.get('invoice_submission_email', default_from_email)
                             for emp_name, emp_email in staff_with_email:
                                 emp_data = results[emp_name]
                                 html_content = email_client.create_breakdown_email(
-                                    emp_name, emp_data['summary'], emp_data['daily'], emp_email
+                                    emp_name, emp_data['summary'], emp_data['daily'], emp_email,
+                                    shop_name=shop_name, invoice_submission_email=invoice_email
                                 )
                                 subject = f"{current_shop_config.get('name', 'Shop')} - Salary Breakdown for {emp_name}"
                                 if email_client.send_email(
@@ -1314,11 +1317,14 @@ def main():
                         except ValueError as e:
                             st.error(f"Email not configured: {e}")
                         else:
+                            shop_name = current_shop_config.get('name', 'Shop')
+                            invoice_email = email_config.get('invoice_submission_email', default_from_email)
                             html_content = email_client.create_breakdown_email(
                                 selected_employee,
                                 summary,
                                 daily,
                                 employee_email_input,
+                                shop_name=shop_name, invoice_submission_email=invoice_email
                             )
                             subject = f"{current_shop_config.get('name', 'Shop')} - Salary Breakdown for {selected_employee}"
                             success = email_client.send_email(
@@ -1405,11 +1411,14 @@ def main():
                                     emp_daily = emp_data['daily']
                                     emp_info = employees_config.get(emp_name, {}) if isinstance(employees_config, dict) else {}
                                     emp_email_addr = emp_info.get('email', '')
+                                    mgmt_shop_name = current_shop_config.get('name', 'Shop')
+                                    mgmt_invoice_email = email_config.get('invoice_submission_email', default_from_email)
                                     html_content = email_client.create_breakdown_email(
                                         emp_name,
                                         emp_summary,
                                         emp_daily,
                                         emp_email_addr,
+                                        shop_name=mgmt_shop_name, invoice_submission_email=mgmt_invoice_email
                                     )
                                     subject = f"{current_shop_config.get('name', 'Shop')} - Salary Breakdown for {emp_name}"
                                     for r in recipients:
