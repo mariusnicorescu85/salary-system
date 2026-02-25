@@ -3171,6 +3171,75 @@ Table Name: {repr(table_name)} (type: {type(table_name).__name__})
                 "Table name is set in config (shop_analytics). A SHOP_METRICS summary row is included."
             )
 
+        # CSS for analytics cards (matches Aleeza-style design)
+        st.markdown("""
+        <style>
+        .emp-card {
+            background: #fff;
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 2px 12px rgba(0,0,0,0.08);
+            margin-bottom: 1.25rem;
+        }
+        .emp-card-header {
+            background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
+            color: white;
+            padding: 0.75rem 1.25rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 0.5rem;
+        }
+        .emp-card-header-left { font-weight: 600; font-size: 1.1rem; }
+        .emp-card-header-right { font-size: 0.9rem; opacity: 0.95; }
+        .emp-card-body { padding: 1rem 1.25rem; }
+        .emp-card-section { margin-bottom: 1rem; }
+        .emp-card-section:last-child { margin-bottom: 0; }
+        .emp-card-section-title { font-weight: 700; font-size: 0.85rem; color: #1e293b; margin-bottom: 0.5rem; }
+        .emp-card-table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+        .emp-card-table td { padding: 0.35rem 0.5rem; vertical-align: top; }
+        .emp-card-table .col-metric { font-weight: 500; color: #475569; width: 28%; }
+        .emp-card-table .col-value { font-weight: 600; color: #1e293b; width: 22%; }
+        .emp-card-table .col-details { font-size: 0.8rem; color: #64748b; }
+        .emp-card-table tr.row-highlight-green { background: #dcfce7 !important; }
+        .emp-card-table tr.row-highlight-orange { background: #fff7ed !important; }
+        .emp-card-table tr.row-highlight-yellow { background: #fefce8 !important; }
+        </style>
+        """, unsafe_allow_html=True)
+
+        def _salary_pct_color(pct: float) -> str:
+            """Green when under 25%, gradient through yellow to red the further from 25%."""
+            target = 25.0
+            if pct <= target:
+                t = pct / target if target > 0 else 0
+                r = int(22 + (234 - 22) * t)
+                g = int(163 + (179 - 163) * t)
+                b = int(74 + (8 - 74) * t)
+                return f"rgb({r},{g},{b})"
+            else:
+                excess = min((pct - target) / 25.0, 1.0)
+                r = int(234 + (220 - 234) * excess)
+                g = int(179 + (38 - 179) * excess)
+                b = int(8 + (38 - 8) * excess)
+                return f"rgb({r},{g},{b})"
+
+        def _efficiency_rating(pct: float) -> tuple:
+            """Return (label, row_class) for efficiency rating. Lower % = better."""
+            if pct < 23:
+                return ("✓ Good", "row-highlight-green")
+            if pct <= 27:
+                return ("✓ On target", "row-highlight-yellow")
+            return ("▲ Needs Improvement", "row-highlight-orange")
+
+        def _cost_efficiency_row_class(pct: float) -> str:
+            """Row background for Cost Efficiency based on value."""
+            if pct < 23:
+                return "row-highlight-green"
+            if pct <= 27:
+                return "row-highlight-yellow"
+            return "row-highlight-orange"
+
         analytics_sub1, analytics_sub2 = st.tabs(["Current Report", "Historical (from Airtable)"])
 
         with analytics_sub1:
@@ -3313,8 +3382,131 @@ Table Name: {repr(table_name)} (type: {type(table_name).__name__})
                     "SalaryShareOfShop": 100.0,
                 })
 
-                analytics_df = pd.DataFrame(analytics_rows)
-                st.dataframe(analytics_df, use_container_width=True, height=400)
+                # Split employee rows from SHOP_METRICS for prettier display
+                employee_rows = [r for r in analytics_rows if r.get("Employee") != "SHOP_METRICS"]
+                shop_row = next((r for r in analytics_rows if r.get("Employee") == "SHOP_METRICS"), None)
+
+                # Key metrics at top
+                if shop_row:
+                    m1, m2, m3, m4 = st.columns(4)
+                    with m1:
+                        st.metric("Shop total sales", format_currency(shop_row.get("AdjustedSales", 0)))
+                    with m2:
+                        st.metric("Shop total salary", format_currency(shop_row.get("FinalTotal", 0)))
+                    with m3:
+                        st.metric("Shop efficiency", f"{shop_row.get('SalaryToSalesPct', 0):.1f}%")
+                    with m4:
+                        st.metric("Employees", len(employee_rows))
+
+                # Employee cards - 2 per row (Aleeza-style design)
+                st.markdown("### Employee cards")
+                for i in range(0, len(employee_rows), 2):
+                    card_cols = st.columns(2)
+                    for j, col in enumerate(card_cols):
+                        idx = i + j
+                        if idx >= len(employee_rows):
+                            break
+                        r = employee_rows[idx]
+                        pct = r.get("SalaryToSalesPct", 0) or 0
+                        sal_color = _salary_pct_color(pct)
+                        eff_label, eff_class = _efficiency_rating(pct)
+                        cost_row_class = _cost_efficiency_row_class(pct)
+                        pt = (r.get("PaymentType") or "").replace("_", " ").upper()
+                        emp = r.get("Employee", "")
+                        period = r.get("Period", "")
+                        final = r.get("FinalTotal", 0)
+                        days = int(r.get("WorkedDays", 0))
+                        earnings_per_day = final / days if days > 0 else 0
+                        issues = r.get("DataIssues", "") or ""
+                        data_quality = f"⚠️ {issues}" if (issues and issues != "None") else "None"
+                        card_html = f"""
+                        <div class="emp-card">
+                            <div class="emp-card-header">
+                                <span class="emp-card-header-left">{emp} – {period}</span>
+                                <span class="emp-card-header-right">{pt} | Total: {format_currency(final)} | <span style="font-weight:700;">{pct:.1f}%</span></span>
+                            </div>
+                            <div class="emp-card-body">
+                                <div class="emp-card-section">
+                                    <div class="emp-card-section-title">Payment Structure</div>
+                                    <table class="emp-card-table">
+                                        <tr><td class="col-metric">Payment Type</td><td class="col-value">{pt}</td><td class="col-details">{r.get('SalesPercentage', '')}</td></tr>
+                                        <tr><td class="col-metric">Config Version</td><td class="col-value">{r.get('ConfigVersion', '')}</td><td class="col-details">Configuration tracking</td></tr>
+                                        <tr><td class="col-metric">Data Quality</td><td class="col-value">{data_quality}</td><td class="col-details">Data validation results</td></tr>
+                                    </table>
+                                </div>
+                                <div class="emp-card-section">
+                                    <div class="emp-card-section-title">Work Summary</div>
+                                    <table class="emp-card-table">
+                                        <tr><td class="col-metric">Worked Days</td><td class="col-value">{days}</td><td class="col-details">Total working days in period</td></tr>
+                                        <tr><td class="col-metric">Worked Hours</td><td class="col-value">{r.get('WorkedHours', 0):.2f}</td><td class="col-details">Total hours logged</td></tr>
+                                        <tr><td class="col-metric">Hourly Rate</td><td class="col-value">{format_currency(r.get("HourlyRate", 0))}</td><td class="col-details">Base hourly payment rate</td></tr>
+                                    </table>
+                                </div>
+                                <div class="emp-card-section">
+                                    <div class="emp-card-section-title">Sales & Commission</div>
+                                    <table class="emp-card-table">
+                                        <tr><td class="col-metric">Sales Commission Rate</td><td class="col-value">{r.get('SalesPercentage', 'N/A')}</td><td class="col-details">Commission % on sales</td></tr>
+                                        <tr><td class="col-metric">Total Sales</td><td class="col-value">{format_currency(r.get("TotalSales", 0))}</td><td class="col-details">Regular sales amount</td></tr>
+                                        <tr><td class="col-metric">Additional Sales</td><td class="col-value">{format_currency(r.get("AddlSales", 0))}</td><td class="col-details">Extra sales/bonuses</td></tr>
+                                        <tr><td class="col-metric">Adjusted Sales</td><td class="col-value">{format_currency(r.get("AdjustedSales", 0))}</td><td class="col-details">Total + Additional sales</td></tr>
+                                    </table>
+                                </div>
+                                <div class="emp-card-section">
+                                    <div class="emp-card-section-title">Payment Calculation</div>
+                                    <table class="emp-card-table">
+                                        <tr><td class="col-metric">Base Payment</td><td class="col-value">{format_currency(r.get("BasePayment", 0))}</td><td class="col-details">Hours × hourly rate</td></tr>
+                                        <tr><td class="col-metric">Sales Commission</td><td class="col-value">{format_currency(r.get("SalesCommission", 0))}</td><td class="col-details">From commission structure</td></tr>
+                                        <tr><td class="col-metric">Bonus Payment</td><td class="col-value">{format_currency(r.get("BonusPayment", 0))}</td><td class="col-details">Additional bonuses/guarantees</td></tr>
+                                        <tr class="row-highlight-green"><td class="col-metric">Final Total Payment</td><td class="col-value">{format_currency(final)}</td><td class="col-details">Base + Commission + Bonuses</td></tr>
+                                    </table>
+                                </div>
+                                <div class="emp-card-section">
+                                    <div class="emp-card-section-title">Performance Metrics</div>
+                                    <table class="emp-card-table">
+                                        <tr><td class="col-metric">Average Sales per Day</td><td class="col-value">{format_currency(r.get('AvgSalesPerDay', 0))}</td><td class="col-details">Total sales ÷ {days} days</td></tr>
+                                        <tr><td class="col-metric">Average Sales per Hour</td><td class="col-value">{format_currency(r.get('AvgSalesPerHour', 0))}</td><td class="col-details">Total sales ÷ hours</td></tr>
+                                        <tr><td class="col-metric">Earnings per Day</td><td class="col-value">{format_currency(earnings_per_day)}</td><td class="col-details">Total payment ÷ working days</td></tr>
+                                    </table>
+                                </div>
+                                <div class="emp-card-section">
+                                    <div class="emp-card-section-title">Business Efficiency Metrics</div>
+                                    <table class="emp-card-table">
+                                        <tr class="{cost_row_class}"><td class="col-metric">Cost Efficiency</td><td class="col-value" style="color:{sal_color};font-weight:700;">{pct:.1f}%</td><td class="col-details">Salary cost per £1 of sales (lower = better)</td></tr>
+                                        <tr><td class="col-metric">Sales Share of Shop</td><td class="col-value">{r.get('SalesShareOfShop', 0):.1f}%</td><td class="col-details">Contribution to total shop sales</td></tr>
+                                        <tr><td class="col-metric">Salary Share of Shop</td><td class="col-value">{r.get('SalaryShareOfShop', 0):.1f}%</td><td class="col-details">Proportion of total shop payroll</td></tr>
+                                        <tr class="{eff_class}"><td class="col-metric">Efficiency Rating</td><td class="col-value">{eff_label}</td><td class="col-details">Overall performance assessment</td></tr>
+                                    </table>
+                                </div>
+                            </div>
+                        </div>
+                        """
+                        with col:
+                            st.markdown(card_html, unsafe_allow_html=True)
+
+                # Optional: full table in expander
+                with st.expander("📋 View full table"):
+                    emp_df = pd.DataFrame(employee_rows)
+                    if not emp_df.empty:
+                        st.dataframe(emp_df, use_container_width=True, height=300, hide_index=True)
+
+                # Shop summary in a highlighted card
+                if shop_row:
+                    st.markdown("---")
+                    with st.container(border=True):
+                        st.subheader("🏪 Shop summary")
+                        st.caption(shop_row.get("Description", ""))
+                        c1, c2, c3 = st.columns(3)
+                        with c1:
+                            st.metric("Total sales", format_currency(shop_row.get("AdjustedSales", 0)))
+                            st.metric("Avg per day", format_currency(shop_row.get("AvgSalesPerDay", 0)))
+                        with c2:
+                            st.metric("Total salary", format_currency(shop_row.get("FinalTotal", 0)))
+                            st.metric("Avg per hour", format_currency(shop_row.get("AvgSalesPerHour", 0)))
+                        with c3:
+                            shop_eff = shop_row.get("SalaryToSalesPct", 0) or 0
+                            eff_color = _salary_pct_color(shop_eff)
+                            st.markdown(f'<div class="metric-label">Efficiency</div><div class="salary-pct-badge" style="color:{eff_color};">{shop_eff:.1f}%</div>', unsafe_allow_html=True)
+                            st.metric("Days worked", int(shop_row.get("WorkedDays", 0)))
 
                 # Save to Airtable
                 st.markdown("---")
@@ -3360,8 +3552,107 @@ Table Name: {repr(table_name)} (type: {type(table_name).__name__})
                             period=period_filter.strip() if period_filter else None,
                         )
                         if records:
-                            hist_df = pd.DataFrame(records)
-                            st.dataframe(hist_df, use_container_width=True, height=400)
+                            def _num(v, default=0):
+                                if v is None: return default
+                                if isinstance(v, (int, float)): return float(v)
+                                s = str(v).replace("£", "").replace(",", "").replace("%", "").strip()
+                                return float(s) if s else default
+
+                            hist_employees = [r for r in records if r.get("Employee") != "SHOP_METRICS"]
+                            hist_shop = next((r for r in records if r.get("Employee") == "SHOP_METRICS"), None)
+
+                            if hist_shop:
+                                m1, m2, m3 = st.columns(3)
+                                with m1:
+                                    st.metric("Shop sales", format_currency(_num(hist_shop.get("AdjustedSales"))))
+                                with m2:
+                                    st.metric("Shop salary", format_currency(_num(hist_shop.get("FinalTotal"))))
+                                with m3:
+                                    st.metric("Efficiency", f"{_num(hist_shop.get('SalaryToSalesPct')):.1f}%")
+
+                            st.markdown("### Employee cards")
+                            for i in range(0, len(hist_employees), 2):
+                                card_cols = st.columns(2)
+                                for j, col in enumerate(card_cols):
+                                    idx = i + j
+                                    if idx >= len(hist_employees):
+                                        break
+                                    r = hist_employees[idx]
+                                    pct = _num(r.get("SalaryToSalesPct"))
+                                    sal_color = _salary_pct_color(pct)
+                                    eff_label, eff_class = _efficiency_rating(pct)
+                                    cost_row_class = _cost_efficiency_row_class(pct)
+                                    pt = (str(r.get("PaymentType", "") or "").replace("_", " ").upper())
+                                    emp = r.get("Employee", "")
+                                    period = r.get("Period", "")
+                                    final = _num(r.get("FinalTotal"))
+                                    days = int(_num(r.get("WorkedDays")))
+                                    earnings_per_day = final / days if days > 0 else 0
+                                    issues = str(r.get("DataIssues", "") or "")
+                                    data_quality = f"⚠️ {issues}" if (issues and issues.lower() != "none") else "None"
+                                    card_html = f"""
+                                    <div class="emp-card">
+                                        <div class="emp-card-header">
+                                            <span class="emp-card-header-left">{emp} – {period}</span>
+                                            <span class="emp-card-header-right">{pt} | Total: {format_currency(final)} | <span style="font-weight:700;">{pct:.1f}%</span></span>
+                                        </div>
+                                        <div class="emp-card-body">
+                                            <div class="emp-card-section">
+                                                <div class="emp-card-section-title">Payment Structure</div>
+                                                <table class="emp-card-table">
+                                                    <tr><td class="col-metric">Payment Type</td><td class="col-value">{pt}</td><td class="col-details">{r.get('SalesPercentage', '')}</td></tr>
+                                                    <tr><td class="col-metric">Config Version</td><td class="col-value">{r.get('ConfigVersion', '')}</td><td class="col-details">Configuration tracking</td></tr>
+                                                    <tr><td class="col-metric">Data Quality</td><td class="col-value">{data_quality}</td><td class="col-details">Data validation results</td></tr>
+                                                </table>
+                                            </div>
+                                            <div class="emp-card-section">
+                                                <div class="emp-card-section-title">Work Summary</div>
+                                                <table class="emp-card-table">
+                                                    <tr><td class="col-metric">Worked Days</td><td class="col-value">{days}</td><td class="col-details">Total working days in period</td></tr>
+                                                    <tr><td class="col-metric">Worked Hours</td><td class="col-value">{_num(r.get('WorkedHours')):.2f}</td><td class="col-details">Total hours logged</td></tr>
+                                                    <tr><td class="col-metric">Hourly Rate</td><td class="col-value">{format_currency(_num(r.get("HourlyRate")))}</td><td class="col-details">Base hourly payment rate</td></tr>
+                                                </table>
+                                            </div>
+                                            <div class="emp-card-section">
+                                                <div class="emp-card-section-title">Sales & Commission</div>
+                                                <table class="emp-card-table">
+                                                    <tr><td class="col-metric">Sales Commission Rate</td><td class="col-value">{r.get('SalesPercentage', 'N/A')}</td><td class="col-details">Commission % on sales</td></tr>
+                                                    <tr><td class="col-metric">Total Sales</td><td class="col-value">{format_currency(_num(r.get("TotalSales")))}</td><td class="col-details">Regular sales amount</td></tr>
+                                                    <tr><td class="col-metric">Additional Sales</td><td class="col-value">{format_currency(_num(r.get("AddlSales")))}</td><td class="col-details">Extra sales/bonuses</td></tr>
+                                                    <tr><td class="col-metric">Adjusted Sales</td><td class="col-value">{format_currency(_num(r.get("AdjustedSales")))}</td><td class="col-details">Total + Additional sales</td></tr>
+                                                </table>
+                                            </div>
+                                            <div class="emp-card-section">
+                                                <div class="emp-card-section-title">Payment Calculation</div>
+                                                <table class="emp-card-table">
+                                                    <tr><td class="col-metric">Base Payment</td><td class="col-value">{format_currency(_num(r.get("BasePayment")))}</td><td class="col-details">Hours × hourly rate</td></tr>
+                                                    <tr><td class="col-metric">Sales Commission</td><td class="col-value">{format_currency(_num(r.get("SalesCommission")))}</td><td class="col-details">From commission structure</td></tr>
+                                                    <tr><td class="col-metric">Bonus Payment</td><td class="col-value">{format_currency(_num(r.get("BonusPayment")))}</td><td class="col-details">Additional bonuses/guarantees</td></tr>
+                                                    <tr class="row-highlight-green"><td class="col-metric">Final Total Payment</td><td class="col-value">{format_currency(final)}</td><td class="col-details">Base + Commission + Bonuses</td></tr>
+                                                </table>
+                                            </div>
+                                            <div class="emp-card-section">
+                                                <div class="emp-card-section-title">Performance Metrics</div>
+                                                <table class="emp-card-table">
+                                                    <tr><td class="col-metric">Average Sales per Day</td><td class="col-value">{format_currency(_num(r.get('AvgSalesPerDay')))}</td><td class="col-details">Total sales ÷ {days} days</td></tr>
+                                                    <tr><td class="col-metric">Average Sales per Hour</td><td class="col-value">{format_currency(_num(r.get('AvgSalesPerHour')))}</td><td class="col-details">Total sales ÷ hours</td></tr>
+                                                    <tr><td class="col-metric">Earnings per Day</td><td class="col-value">{format_currency(earnings_per_day)}</td><td class="col-details">Total payment ÷ working days</td></tr>
+                                                </table>
+                                            </div>
+                                            <div class="emp-card-section">
+                                                <div class="emp-card-section-title">Business Efficiency Metrics</div>
+                                                <table class="emp-card-table">
+                                                    <tr class="{cost_row_class}"><td class="col-metric">Cost Efficiency</td><td class="col-value" style="color:{sal_color};font-weight:700;">{pct:.1f}%</td><td class="col-details">Salary cost per £1 of sales (lower = better)</td></tr>
+                                                    <tr><td class="col-metric">Sales Share of Shop</td><td class="col-value">{_num(r.get('SalesShareOfShop')):.1f}%</td><td class="col-details">Contribution to total shop sales</td></tr>
+                                                    <tr><td class="col-metric">Salary Share of Shop</td><td class="col-value">{_num(r.get('SalaryShareOfShop')):.1f}%</td><td class="col-details">Proportion of total shop payroll</td></tr>
+                                                    <tr class="{eff_class}"><td class="col-metric">Efficiency Rating</td><td class="col-value">{eff_label}</td><td class="col-details">Overall performance assessment</td></tr>
+                                                </table>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    """
+                                    with col:
+                                        st.markdown(card_html, unsafe_allow_html=True)
                             st.success(f"Loaded {len(records)} records.")
                         else:
                             st.info("No analytics records found. Save from Current Report first.")
