@@ -7,13 +7,31 @@ from typing import Dict, List, Optional
 from datetime import datetime
 import pandas as pd
 
+# Optional import for UK wage bracket
+try:
+    from src.wage_bracket import get_rate_for_date
+except ImportError:
+    get_rate_for_date = None
+
 
 class CalculationEngine:
     """Main calculation engine for salary calculations"""
     
-    def __init__(self, employee_config: Dict, bonus_config: Dict):
+    def __init__(self, employee_config: Dict, bonus_config: Dict, wage_brackets: Optional[List[Dict]] = None):
         self.employee_config = employee_config
         self.bonus_config = bonus_config
+        self.wage_brackets = wage_brackets or []
+    
+    def _resolve_hourly_rate(self, employee: Dict, date_str: str) -> float:
+        """Get hourly rate: use override if set, else UK wage bracket from DOB."""
+        rate = employee.get("hourly_rate") or 0
+        if rate > 0:
+            return rate
+        dob = employee.get("date_of_birth")
+        if not dob or not self.wage_brackets or not get_rate_for_date:
+            return 0
+        resolved = get_rate_for_date(date_str, dob, self.wage_brackets)
+        return float(resolved) if resolved is not None else 0
     
     def calculate_tiered_commission(self, total_sales: float, tiers: List[Dict]) -> float:
         """Calculate tiered commission based on sales tiers"""
@@ -174,7 +192,7 @@ class CalculationEngine:
             logger.debug(f"Available employees: {list(self.employee_config.keys())[:10]}...")
         
         payment_type = employee.get('payment_type', 'hourly_only')
-        hourly_rate = employee.get('hourly_rate', 0)
+        hourly_rate = self._resolve_hourly_rate(employee, date)
         
         total_sales = sales + addl_sales
         
@@ -311,7 +329,7 @@ class CalculationEngine:
         employee = self.employee_config.get(employee_name, {})
         bonus_info = self.bonus_config.get(employee_name, {})
         payment_type = employee.get('payment_type', 'hourly_only')
-        hourly_rate = employee.get('hourly_rate', 0)
+        first_date = daily_records[0].get('Date', '')
         advance = employee.get('advance', 0)
         
         # Calculate totals
@@ -320,6 +338,14 @@ class CalculationEngine:
         total_addl_sales = sum(r.get('AddlSales', 0) for r in daily_records)
         total_commission = sum(r.get('Commission', 0) for r in daily_records)
         adjusted_sales = total_sales + total_addl_sales
+        
+        # Hours salary: sum (hours × rate) per day so mid-month wage bracket changes are correct
+        hours_salary = sum(
+            r.get('Hours', 0) * (r.get('HrlyRate', 0) or 0)
+            for r in daily_records
+        )
+        # Effective rate for display and manual hours (weighted avg when rate varies by day)
+        effective_hourly_rate = hours_salary / total_hours if total_hours > 0 else self._resolve_hourly_rate(employee, first_date)
         
         # Worked days (days with hours > 0)
         worked_days = len([r for r in daily_records if r.get('Hours', 0) > 0.001])
@@ -339,12 +365,9 @@ class CalculationEngine:
         ])
         
         manual_hours = bonus_info.get('manualHours', 0)
-        manual_hours_pay = manual_hours * hourly_rate if hourly_rate > 0 else 0
+        manual_hours_pay = manual_hours * effective_hourly_rate if effective_hourly_rate > 0 else 0
         deductions = bonus_info.get('deductions', 0)
         rent = bonus_info.get('rent', 0)
-        
-        # Calculate final payment based on payment type
-        hours_salary = total_hours * hourly_rate
         
         # Initialize variables that may be used in summary
         monthly_max = 0.0
@@ -453,6 +476,34 @@ class CalculationEngine:
             base_payment = hours_salary + total_bonus + manual_hours_pay
             final_payment = base_payment - deductions - rent - advance
         
+        # Wage bracket breakdown: when rate varies mid-month (e.g. employee turns 18)
+        summary_wage_breakdown = []
+        rate_to_days = {}  # rate -> [(date, hours), ...]
+        for r in daily_records:
+            rate = r.get('HrlyRate', 0) or 0
+            hrs = r.get('Hours', 0)
+            if hrs <= 0 or rate <= 0:
+                continue
+            date = r.get('Date', '')
+            if rate not in rate_to_days:
+                rate_to_days[rate] = []
+            rate_to_days[rate].append((date, hrs))
+        if len(rate_to_days) >= 2:
+            for rate in sorted(rate_to_days.keys()):
+                days = rate_to_days[rate]
+                dates = sorted([d[0] for d in days])
+                period_hours = sum(d[1] for d in days)
+                period_pay = period_hours * rate
+                summary_wage_breakdown.append({
+                    'date_from': dates[0],
+                    'date_to': dates[-1],
+                    'hours': round(period_hours, 2),
+                    'rate': rate,
+                    'pay': round(period_pay, 2),
+                })
+            # Sort by date_from so periods appear in chronological order
+            summary_wage_breakdown.sort(key=lambda x: x['date_from'])
+        
         # Individual bonus breakdown for detailed view
         bonus_breakdown = {
             'DailySalesBonus': bonus_info.get('dailySalesBonus', 0),
@@ -474,7 +525,7 @@ class CalculationEngine:
             'AddlSales': round(total_addl_sales, 2),
             'AdjustedSales': round(adjusted_sales, 2),
             'AvgSalePerDay': round(avg_sales_per_day, 2),
-            'RatePerHour': hourly_rate,
+            'RatePerHour': effective_hourly_rate,
             'HoursSalary': round(hours_salary, 2),
             'TotalCommission': round(total_commission, 2),
             'TotalBonus': round(total_bonus, 2),
@@ -485,7 +536,8 @@ class CalculationEngine:
             'Advance': advance,
             'FinalPayment': round(final_payment, 2),
             'PaymentType': payment_type,
-            'BonusBreakdown': bonus_breakdown  # Include detailed bonus breakdown
+            'BonusBreakdown': bonus_breakdown,  # Include detailed bonus breakdown
+            'WageBracketBreakdown': summary_wage_breakdown,  # When rate varies mid-month
         }
         
         if payment_type == 'tiered_commission':

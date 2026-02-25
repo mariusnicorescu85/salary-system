@@ -6,6 +6,7 @@ Main Streamlit application for running salary calculations
 import streamlit as st
 import pandas as pd
 import yaml
+import json
 from pathlib import Path
 from typing import Dict, List, Optional
 from datetime import datetime
@@ -32,6 +33,21 @@ from src.calculation_engine import CalculationEngine
 from src.data_processor import DataProcessor
 from src.airtable_client import AirtableClient
 from src.email_client import EmailClient
+from src.google_drive_client import GoogleDriveClient
+
+
+def _parse_dob_for_bracket(dob_raw) -> Optional[str]:
+    """Normalize DOB from Airtable to string parseable by wage_bracket (YYYY-MM-DD or DD/MM/YYYY)."""
+    if not dob_raw:
+        return None
+    if isinstance(dob_raw, datetime):
+        return dob_raw.strftime("%Y-%m-%d")
+    s = str(dob_raw).strip()
+    if not s:
+        return None
+    if len(s) >= 10 and s[4] == "-" and s[7] == "-":
+        return s[:10]
+    return s
 
 
 # Page configuration
@@ -60,6 +76,143 @@ if 'target_current_date' not in st.session_state:
     st.session_state.target_current_date = datetime.today().date()
 if 'daily_target_date' not in st.session_state:
     st.session_state.daily_target_date = datetime.today().date()
+if 'selected_saved_report' not in st.session_state:
+    st.session_state.selected_saved_report = None
+if 'selected_gdrive_report' not in st.session_state:
+    st.session_state.selected_gdrive_report = None  # {'id': str, 'name': str}
+
+# Saved reports directory for persisting uploaded files
+SAVED_REPORTS_DIR = Path("saved_reports")
+
+
+def _ensure_saved_reports_dir():
+    """Create saved_reports directory if it doesn't exist."""
+    SAVED_REPORTS_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _list_saved_reports() -> List[str]:
+    """Return list of saved report filenames (paths as strings)."""
+    _ensure_saved_reports_dir()
+    if not SAVED_REPORTS_DIR.exists():
+        return []
+    files = sorted(
+        [f.name for f in SAVED_REPORTS_DIR.iterdir() if f.suffix.lower() in ('.csv', '.xlsx')],
+        reverse=True
+    )
+    return files
+
+
+def _save_report(uploaded_file) -> bool:
+    """Save uploaded file to saved_reports. Returns True on success."""
+    if uploaded_file is None:
+        return False
+    try:
+        _ensure_saved_reports_dir()
+        base = Path(uploaded_file.name).stem
+        ext = Path(uploaded_file.name).suffix.lower()
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"{base}_{timestamp}{ext}"
+        path = SAVED_REPORTS_DIR / filename
+        uploaded_file.seek(0)
+        path.write_bytes(uploaded_file.read())
+        return True
+    except Exception as e:
+        logger.error(f"Failed to save report: {e}")
+        return False
+
+
+def _load_saved_report(filename: str):
+    """Load a saved report into a file-like object (BytesIO with name/size)."""
+    path = SAVED_REPORTS_DIR / filename
+    if not path.exists():
+        return None
+    try:
+        data = path.read_bytes()
+        bio = io.BytesIO(data)
+        bio.name = filename
+        bio.size = len(data)
+        return bio
+    except Exception as e:
+        logger.error(f"Failed to load saved report: {e}")
+        return None
+
+
+def _get_google_drive_client():
+    """Get Google Drive client if configured (Service Account from secrets, or OAuth from credentials/)."""
+    try:
+        # Service Account (for Streamlit Cloud)
+        sa_json = None
+        if hasattr(st, 'secrets') and st.secrets.get('google_drive', {}).get('service_account_json'):
+            sa_json = st.secrets.google_drive.service_account_json
+        if sa_json:
+            return GoogleDriveClient(service_account_json=sa_json)
+        # OAuth (local - credentials in credentials/ folder)
+        creds_path = Path('credentials/google_drive_credentials.json')
+        if creds_path.exists():
+            return GoogleDriveClient()
+    except Exception as e:
+        logger.debug(f"Google Drive not available: {e}")
+    return None
+
+
+def _get_saved_reports_folder_id(shop_key: str) -> str:
+    """Get the folder ID for saved reports for a given shop from config."""
+    config = load_config()
+    if not config or not shop_key:
+        return ""
+    shop = config.get('shops', {}).get(shop_key, {})
+    return (shop.get('saved_reports_folder_id') or "").strip()
+
+
+def _save_report_to_gdrive(uploaded_file, folder_id: str) -> bool:
+    """Save uploaded file to Google Drive. Returns True on success."""
+    if not uploaded_file or not folder_id:
+        return False
+    client = _get_google_drive_client()
+    if not client:
+        return False
+    try:
+        uploaded_file.seek(0)
+        content = uploaded_file.read()
+        ext = Path(uploaded_file.name).suffix.lower()
+        now = datetime.now()
+        filename = f"report_{now.month:02d}_{now.year}{ext}"
+        file_id = client.upload_file(content, filename, folder_id)
+        return file_id is not None
+    except Exception as e:
+        logger.error(f"Failed to save report to Google Drive: {e}")
+        return False
+
+
+def _list_gdrive_reports(folder_id: str) -> List[dict]:
+    """List report files (csv, xlsx) in a Google Drive folder."""
+    if not folder_id:
+        return []
+    client = _get_google_drive_client()
+    if not client:
+        return []
+    try:
+        files = client.list_files_in_folder(folder_id)
+        return [f for f in files if f.get('name', '').lower().endswith(('.csv', '.xlsx'))]
+    except Exception as e:
+        logger.error(f"Failed to list Google Drive reports: {e}")
+        return []
+
+
+def _load_gdrive_report(file_id: str, filename: str):
+    """Load a report from Google Drive into a file-like object."""
+    client = _get_google_drive_client()
+    if not client:
+        return None
+    try:
+        data = client.download_file(file_id)
+        bio = io.BytesIO(data)
+        bio.name = filename
+        bio.size = len(data)
+        return bio
+    except Exception as e:
+        logger.error(f"Failed to load report from Google Drive: {e}")
+        return None
 
 
 @st.cache_data
@@ -76,9 +229,39 @@ def load_config():
         return config
 
 
-@st.cache_data
+def _get_airtable_credentials(shop_key: str = None):
+    """
+    Get Airtable base_id, api_key, and table names. Used when system is Airtable-only.
+    Returns (base_id, api_key, tables_dict) or (None, None, None) if credentials missing.
+    """
+    config = load_config()
+    if not config or not config.get("shops"):
+        return None, None, None
+    shop = config["shops"].get(shop_key) if shop_key else list(config["shops"].values())[0]
+    if not shop:
+        return None, None, None
+    base_id = (shop.get("airtable_base_id") or "").strip()
+    if not base_id:
+        return None, None, None
+    api_key = None
+    try:
+        if hasattr(st, "secrets") and st.secrets.get("airtable", {}).get("api_key"):
+            api_key = st.secrets.airtable.api_key
+    except Exception:
+        pass
+    api_key = api_key or os.getenv("AIRTABLE_API_KEY") or st.session_state.get("airtable_api_key", "")
+    if not api_key:
+        return base_id, None, None
+    tables = config.get("airtable_config_tables", {})
+    tables_tuple = (
+        tables.get("shop_targets", "Shop Targets"),
+        tables.get("daily_targets", "Daily Targets"),
+    )
+    return base_id, api_key, tables_tuple
+
+
 def load_employee_config(shop_key: str):
-    """Load employee configuration for a shop"""
+    """Load employee configuration for a shop from Airtable (Employees, Commission Tiers, Name Mappings, Sales Bonus Thresholds)."""
     config = load_config()
     if not config:
         return None, None, None
@@ -87,19 +270,159 @@ def load_employee_config(shop_key: str):
     if not shop_config:
         return None, None, None
     
-    employee_config_path = Path(shop_config['employee_config'])
-    if not employee_config_path.exists():
-        st.error(f"Employee config not found: {employee_config_path}")
+    base_id = (shop_config.get("airtable_base_id") or "").strip()
+    api_key = None
+    try:
+        if hasattr(st, "secrets") and st.secrets.get("airtable", {}).get("api_key"):
+            api_key = st.secrets.airtable.api_key
+    except Exception:
+        pass
+    api_key = api_key or os.getenv("AIRTABLE_API_KEY") or st.session_state.get("airtable_api_key", "")
+    
+    if not base_id or not api_key:
         return None, None, None
     
-    with open(employee_config_path, 'r') as f:
-        emp_config = yaml.safe_load(f)
+    return _load_employee_config_from_airtable(shop_key, base_id, api_key)
+
+
+def _load_employee_config_from_airtable(
+    shop_key: str,
+    base_id: str,
+    api_key: str,
+) -> tuple:
+    """
+    Load employee configuration from Airtable (Employees, Commission Tiers, Name Mappings, Sales Bonus Thresholds).
+    Returns (employees_dict, bonuses_dict, emp_config_full) - same shape as load_employee_config.
+    Bonuses are loaded separately per month - call load_monthly_bonuses for that.
+    """
+    config = load_config()
+    if not config:
+        return None, None, None
     
-    return (
-        emp_config.get('employees', {}), 
-        emp_config.get('bonuses', {}),
-        emp_config  # Return full config for name_mapping access
+    shop_config = config['shops'].get(shop_key)
+    if not shop_config:
+        return None, None, None
+    
+    tables = config.get('airtable_config_tables', {})
+    emp_table = tables.get('employees', 'Employees')
+    tiers_table = tables.get('commission_tiers', 'Commission Tiers')
+    mappings_table = tables.get('name_mappings', 'Name Mappings')
+    bonus_table = tables.get('sales_bonus_thresholds', 'Sales Bonus Thresholds')
+    
+    shop_display_name = shop_config.get('shop_display_name') or shop_config.get('name', shop_key)
+    
+    try:
+        client = AirtableClient(api_key=api_key)
+    except Exception as e:
+        logger.error(f"Airtable client init failed: {e}")
+        return None, None, None
+    
+    # Fetch employees
+    emp_records = client.get_employees_for_shop(base_id, emp_table, shop_display_name)
+    if not emp_records:
+        logger.warning(f"No employees found for shop {shop_display_name} in Airtable")
+        return {}, {}, {}
+    
+    # Fetch commission tiers
+    tiers_by_emp = client.get_commission_tiers_for_shop(
+        base_id, tiers_table, emp_table, shop_display_name
     )
+    
+    # Fetch name mappings
+    name_mapping = client.get_name_mappings_for_shop(
+        base_id, mappings_table, emp_table, shop_display_name
+    )
+    
+    # Fetch sales bonus thresholds
+    sales_bonus_by_emp = client.get_sales_bonus_thresholds_for_shop(
+        base_id, bonus_table, emp_table, shop_display_name
+    )
+    
+    
+    # Build employees dict
+    employees = {}
+    for rec in emp_records:
+        name = rec.get("Name", "").strip()
+        if not name:
+            continue
+        
+        hourly = rec.get("Hourly Rate Override")
+        if hourly is not None and hourly != "":
+            try:
+                hourly_rate = float(hourly)
+            except (TypeError, ValueError):
+                hourly_rate = 0
+        else:
+            hourly_rate = 0
+        
+        emp = {
+            "payment_type": rec.get("Payment Type") or "hourly_only",
+            "hourly_rate": hourly_rate,
+            "email": rec.get("Email") or "",
+        }
+        
+        # Date of Birth - used for UK wage bracket when no hourly rate override
+        dob_raw = rec.get("Date of Birth")
+        if dob_raw:
+            emp["date_of_birth"] = _parse_dob_for_bracket(dob_raw)
+        
+        if rec.get("Commission Rate") is not None and rec.get("Commission Rate") != "":
+            try:
+                emp["commission_rate"] = float(rec.get("Commission Rate"))
+            except (TypeError, ValueError):
+                pass
+        
+        if rec.get("Daily Transport") is not None and rec.get("Daily Transport") != "":
+            try:
+                emp["daily_transport"] = float(rec.get("Daily Transport"))
+            except (TypeError, ValueError):
+                pass
+        
+        if rec.get("Rent") is not None and rec.get("Rent") != "":
+            try:
+                emp["rent"] = float(rec.get("Rent"))
+            except (TypeError, ValueError):
+                pass
+        
+        if rec.get("Advance") is not None and rec.get("Advance") != "":
+            try:
+                emp["advance"] = float(rec.get("Advance"))
+            except (TypeError, ValueError):
+                pass
+        
+        # Commission tiers
+        if name in tiers_by_emp and tiers_by_emp[name]:
+            emp["commission_tiers"] = tiers_by_emp[name]
+        
+        # Sales bonus thresholds (november_bonuses, december_bonuses, etc.)
+        if name in sales_bonus_by_emp:
+            for mon, bonuses_list in sales_bonus_by_emp[name].items():
+                key = f"{mon}_bonuses"
+                emp[key] = bonuses_list
+        
+        # Special config (e.g. Alex)
+        if rec.get("Special Config JSON"):
+            try:
+                sc = rec.get("Special Config JSON")
+                if isinstance(sc, str):
+                    sc = json.loads(sc)
+                emp.update(sc)
+            except Exception:
+                pass
+        
+        employees[name] = emp
+    
+    # Bonuses (monthly adjustments) are loaded separately per month
+    bonuses = {name: {} for name in employees}
+    
+    emp_config_full = {
+        "employees": employees,
+        "bonuses": bonuses,
+        "name_mapping": name_mapping,
+        "exclude_patterns": ["test", "TEST", "admin", "ADMIN", "manager", "MANAGER", "demo", "DEMO"],
+    }
+    
+    return employees, bonuses, emp_config_full
 
 
 def format_currency(value: float) -> str:
@@ -107,168 +430,105 @@ def format_currency(value: float) -> str:
     return f"£{value:,.2f}"
 
 
-def load_monthly_adjustments(shop_key: str, year: int, month: int) -> Dict:
-    """
-    Load monthly adjustments for a specific month (from Airtable if configured, else YAML).
-    Falls back to YAML when Airtable returns empty, so local YAML overrides empty Airtable.
-    """
-    def _load_from_yaml() -> Dict:
-        adjustments_path = Path(f"config/monthly_adjustments_{shop_key}_{year}-{month:02d}.yaml")
-        if adjustments_path.exists():
-            with open(adjustments_path, 'r') as f:
-                return yaml.safe_load(f) or {}
+def load_monthly_bonuses(shop_key: str, year: int, month: int, shop_filter_override: Optional[str] = None) -> Dict:
+    """Load monthly bonuses from Airtable (Monthly Bonuses table) for a specific month."""
+    base_id, api_key, _ = _get_airtable_credentials(shop_key)
+    if not base_id or not api_key:
+        return {}
+    config = load_config()
+    shop_config = (config or {}).get("shops", {}).get(shop_key, {})
+    shop_display = shop_filter_override or shop_config.get("shop_display_name") or shop_config.get("name", shop_key)
+    tables = (config or {}).get("airtable_config_tables", {})
+    bonus_table = tables.get("monthly_bonus", "Monthly Bonuses")
+    emp_table = tables.get("employees", "Employees")
+    try:
+        client = AirtableClient(api_key=api_key)
+        id_to_name = client._get_employee_id_to_name(base_id, emp_table, shop_display)
+        return client.get_monthly_bonuses(
+            base_id, bonus_table, year, month,
+            shop_display_name=shop_display,
+            employee_id_to_name=id_to_name,
+        )
+    except Exception as e:
+        logger.warning("Airtable load_monthly_bonuses failed: %s", e)
         return {}
 
-    use_at, base_id, api_key, tables = _airtable_persistence()
-    if use_at and base_id and api_key and tables[2]:
-        try:
-            client = AirtableClient(api_key=api_key)
-            at_result = client.get_monthly_adjustments(base_id, tables[2], shop_key, year, month)
-            # Fall back to YAML when Airtable returns empty (e.g. no Monthly Adjustments table data yet)
-            if at_result:
-                return at_result
-            yaml_data = _load_from_yaml()
-            if yaml_data:
-                logger.info("Airtable monthly adjustments empty, using YAML file")
-            return yaml_data
-        except Exception as e:
-            logger.warning("Airtable load_monthly_adjustments failed, falling back to file: %s", e)
-    return _load_from_yaml()
 
-
-def save_monthly_adjustments(shop_key: str, year: int, month: int, adjustments: Dict):
-    """Save monthly adjustments (to Airtable if configured, else YAML)."""
-    use_at, base_id, api_key, tables = _airtable_persistence()
-    if use_at and base_id and api_key and tables[2]:
-        try:
-            client = AirtableClient(api_key=api_key)
-            client.save_monthly_adjustments(base_id, tables[2], shop_key, year, month, adjustments)
-            return
-        except Exception as e:
-            logger.warning("Airtable save_monthly_adjustments failed, falling back to file: %s", e)
-    adjustments_path = Path(f"config/monthly_adjustments_{shop_key}_{year}-{month:02d}.yaml")
-    adjustments_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(adjustments_path, 'w') as f:
-        yaml.dump(adjustments, f, default_flow_style=False, sort_keys=False)
-
-
-def _airtable_persistence():
-    """
-    If Airtable persistence is enabled (e.g. on Streamlit Cloud), return (True, base_id, api_key, tables).
-    Tables: (shop_targets_table, daily_targets_table, monthly_adjustments_table).
-    Otherwise return (False, None, None, (None, None, None)).
-    """
+def save_monthly_bonuses(shop_key: str, year: int, month: int, bonuses: Dict, shop_filter_override: Optional[str] = None):
+    """Save monthly bonuses to Airtable (Monthly Bonuses table)."""
+    base_id, api_key, _ = _get_airtable_credentials(shop_key)
+    if not base_id or not api_key:
+        logger.warning("Cannot save monthly bonuses: missing Airtable credentials")
+        return
+    config = load_config()
+    shop_config = (config or {}).get("shops", {}).get(shop_key, {})
+    shop_display = shop_filter_override or shop_config.get("shop_display_name") or shop_config.get("name", shop_key)
+    tables = (config or {}).get("airtable_config_tables", {})
+    bonus_table = tables.get("monthly_bonus", "Monthly Bonuses")
+    emp_table = tables.get("employees", "Employees")
     try:
-        if hasattr(st, "secrets") and "airtable" in st.secrets:
-            at = st.secrets["airtable"]
-            api_key = at.get("api_key") or at.get("API_KEY") or os.getenv("AIRTABLE_API_KEY")
-            persist = at.get("persist_targets") or os.getenv("PERSIST_TARGETS_TO_AIRTABLE", "").lower() in ("1", "true", "yes")
-            if not (api_key and persist):
-                return False, None, None, (None, None, None)
-            base_id = at.get("persist_base_id") or at.get("base_id")
-            if not base_id and hasattr(st, "session_state"):
-                config = load_config()
-                if config and config.get("shops"):
-                    first_shop = list(config["shops"].values())[0]
-                    base_id = first_shop.get("airtable_base_id")
-            if not base_id:
-                return False, None, None, (None, None, None)
-            tables = (
-                at.get("shop_targets_table") or "Shop Targets",
-                at.get("daily_targets_table") or "Daily Targets",
-                at.get("monthly_adjustments_table") or "Monthly Adjustments",
-            )
-            return True, base_id, api_key, tables
-    except Exception:
-        pass
-    return False, None, None, (None, None, None)
+        client = AirtableClient(api_key=api_key)
+        id_to_name = client._get_employee_id_to_name(base_id, emp_table, shop_display)
+        name_to_id = {v: k for k, v in id_to_name.items()}
+        client.save_monthly_bonuses(
+            base_id, bonus_table, year, month, bonuses,
+            employee_name_to_id=name_to_id,
+            shop_display_name=shop_display,
+        )
+    except Exception as e:
+        logger.warning("Airtable save_monthly_bonuses failed: %s", e)
 
 
 def load_shop_targets() -> Dict:
-    """Load saved monthly sales targets per shop (from Airtable if configured, else YAML)."""
-    use_at, base_id, api_key, tables = _airtable_persistence()
-    if use_at and base_id and api_key and tables[0]:
-        try:
-            client = AirtableClient(api_key=api_key)
-            return client.get_shop_targets(base_id, tables[0])
-        except Exception as e:
-            logger.warning("Airtable load_shop_targets failed, falling back to file: %s", e)
-    path = Path("config/shop_targets.yaml")
-    if not path.exists():
+    """Load saved monthly sales targets per shop from Airtable."""
+    base_id, api_key, tables = _get_airtable_credentials()
+    if not base_id or not api_key or not tables:
         return {}
-    with open(path, "r") as f:
-        return yaml.safe_load(f) or {}
+    try:
+        client = AirtableClient(api_key=api_key)
+        return client.get_shop_targets(base_id, tables[0])
+    except Exception as e:
+        logger.warning("Airtable load_shop_targets failed: %s", e)
+        return {}
 
 
 def save_shop_targets(targets: Dict):
-    """Persist monthly sales targets per shop (to Airtable if configured, else YAML)."""
-    use_at, base_id, api_key, tables = _airtable_persistence()
-    if use_at and base_id and api_key and tables[0]:
-        try:
-            client = AirtableClient(api_key=api_key)
-            client.save_shop_targets(base_id, tables[0], targets)
-            return
-        except Exception as e:
-            logger.warning("Airtable save_shop_targets failed, falling back to file: %s", e)
-    path = Path("config/shop_targets.yaml")
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w") as f:
-        yaml.dump(targets, f, default_flow_style=False, sort_keys=False)
-
-
-def _load_daily_targets_from_file() -> Dict:
-    path = Path("config/daily_targets.yaml")
-    if not path.exists():
-        return {}
-    with open(path, "r") as f:
-        raw = yaml.safe_load(f) or {}
-    out = {}
-    for shop_key, dates in raw.items():
-        out[shop_key] = {}
-        for date_str, val in (dates or {}).items():
-            if isinstance(val, dict):
-                staff_targets = val.get("staff_daily_targets")
-                if not isinstance(staff_targets, dict):
-                    staff_targets = {}
-                staff_sales = val.get("staff_daily_sales")
-                if not isinstance(staff_sales, dict):
-                    staff_sales = {}
-                out[shop_key][date_str] = {
-                    "staff_working": val.get("staff_working") or [],
-                    "staff_daily_targets": {k: float(v) for k, v in staff_targets.items()},
-                    "staff_daily_sales": {k: float(v) for k, v in staff_sales.items()},
-                }
-            else:
-                out[shop_key][date_str] = {"staff_working": [], "staff_daily_targets": {}, "staff_daily_sales": {}}
-    return out
+    """Persist monthly sales targets per shop to Airtable."""
+    base_id, api_key, tables = _get_airtable_credentials()
+    if not base_id or not api_key or not tables:
+        logger.warning("Cannot save shop targets: missing Airtable credentials")
+        return
+    try:
+        client = AirtableClient(api_key=api_key)
+        client.save_shop_targets(base_id, tables[0], targets)
+    except Exception as e:
+        logger.warning("Airtable save_shop_targets failed: %s", e)
 
 
 def load_daily_targets() -> Dict:
-    """Load saved daily targets per shop (from Airtable if configured, else YAML)."""
-    use_at, base_id, api_key, tables = _airtable_persistence()
-    if use_at and base_id and api_key and tables[1]:
-        try:
-            client = AirtableClient(api_key=api_key)
-            return client.get_daily_targets(base_id, tables[1])
-        except Exception as e:
-            logger.warning("Airtable load_daily_targets failed, falling back to file: %s", e)
-    return _load_daily_targets_from_file()
+    """Load saved daily targets per shop from Airtable."""
+    base_id, api_key, tables = _get_airtable_credentials()
+    if not base_id or not api_key or not tables:
+        return {}
+    try:
+        client = AirtableClient(api_key=api_key)
+        return client.get_daily_targets(base_id, tables[1])
+    except Exception as e:
+        logger.warning("Airtable load_daily_targets failed: %s", e)
+        return {}
 
 
 def save_daily_targets(targets: Dict):
-    """Persist daily targets per shop (to Airtable if configured, else YAML)."""
-    use_at, base_id, api_key, tables = _airtable_persistence()
-    if use_at and base_id and api_key and tables[1]:
-        try:
-            client = AirtableClient(api_key=api_key)
-            client.save_daily_targets(base_id, tables[1], targets)
-            return
-        except Exception as e:
-            logger.warning("Airtable save_daily_targets failed, falling back to file: %s", e)
-    path = Path("config/daily_targets.yaml")
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w") as f:
-        yaml.dump(targets, f, default_flow_style=False, sort_keys=False)
+    """Persist daily targets per shop to Airtable."""
+    base_id, api_key, tables = _get_airtable_credentials()
+    if not base_id or not api_key or not tables:
+        logger.warning("Cannot save daily targets: missing Airtable credentials")
+        return
+    try:
+        client = AirtableClient(api_key=api_key)
+        client.save_daily_targets(base_id, tables[1], targets)
+    except Exception as e:
+        logger.warning("Airtable save_daily_targets failed: %s", e)
 
 
 def get_email_client_for_shop(shop_key: str) -> EmailClient:
@@ -282,22 +542,18 @@ def get_email_client_for_shop(shop_key: str) -> EmailClient:
     SMTP_USER = "pythairstyleco@gmail.com"
     SMTP_PASSWORD = "app_password_for_pyt"
     
-    [email_silverburn]
-    SMTP_USER = "pythairstyleco@gmail.com"
-    SMTP_PASSWORD = "app_password_for_pyt"
-    
     [email_opatra]
     SMTP_USER = "invoices.opulent@gmail.com"
     SMTP_PASSWORD = "app_password_for_opatra"
     ```
     
-    If a section for the given shop key (e.g. `email_pyt`, `email_silverburn`,
-    `email_opatra`) is not found, falls back to global SMTP_* env vars.
+    If a section for the given shop key (e.g. `email_pyt`, `email_opatra`)
+    is not found, falls back to global SMTP_* env vars.
     """
     smtp_user = None
     smtp_password = None
     
-    # Try per-shop Streamlit secrets: [email_pyt], [email_silverburn], [email_opatra], etc.
+    # Try per-shop Streamlit secrets: [email_pyt], [email_opatra], etc.
     try:
         if hasattr(st, "secrets"):
             section_name = f"email_{shop_key}"
@@ -346,6 +602,446 @@ def verify_password(password: str, stored_hash: str, salt: str = None) -> bool:
     except Exception as e:
         logger.error(f"Password verification error: {e}")
         return False
+
+
+def _emp_name_to_id_map(client, base_id, emp_table, shop_display) -> Dict[str, str]:
+    """Build {employee_name: record_id} for linked record fields."""
+    records = client.get_employee_records_with_ids(base_id, emp_table, shop_display_name=shop_display, active_only=False)
+    return {r.get("Name", ""): r.get("id") for r in records if r.get("Name")}
+
+
+def _render_employees_tab(client, base_id, tables_cfg, shop_display, shop_options, payment_types, config):
+    emp_table = tables_cfg.get("employees", "Employees")
+    try:
+        records = client.get_employee_records_with_ids(base_id, emp_table, shop_display_name=shop_display, active_only=False)
+    except Exception as e:
+        st.error(f"❌ Failed to load: {e}")
+        records = []
+    editable_cols = ["Name", "Shop", "Date of Birth", "Email", "Payment Type", "Hourly Rate Override", "Commission Rate", "Daily Transport", "Rent", "Advance", "Employment Status"]
+    num_cols = ("Hourly Rate Override", "Commission Rate", "Daily Transport", "Rent", "Advance")
+    if records:
+        rows = []
+        for r in records:
+            row = {"_id": r.get("id", "")}
+            for col in editable_cols:
+                val = r.get(col)
+                row[col] = "" if val is None else (", ".join(str(x) for x in val) if isinstance(val, list) else str(val).strip())
+            rows.append(row)
+        df = pd.DataFrame(rows)
+        id_col, edit_df = df["_id"], df.drop(columns=["_id"])
+        col_config = {
+            "Name": st.column_config.TextColumn("Name", required=True),
+            "Shop": st.column_config.SelectboxColumn("Shop", options=shop_options, required=True),
+            "Date of Birth": st.column_config.TextColumn("Date of Birth"),
+            "Email": st.column_config.TextColumn("Email"),
+            "Payment Type": st.column_config.SelectboxColumn("Payment Type", options=payment_types),
+            "Hourly Rate Override": st.column_config.NumberColumn("Hourly Rate", format="%.2f"),
+            "Commission Rate": st.column_config.NumberColumn("Commission Rate", format="%.2f"),
+            "Daily Transport": st.column_config.NumberColumn("Daily Transport", format="%.2f"),
+            "Rent": st.column_config.NumberColumn("Rent", format="%.2f"),
+            "Advance": st.column_config.NumberColumn("Advance", format="%.2f"),
+            "Employment Status": st.column_config.SelectboxColumn("Employment Status", options=["Active", "Inactive"]),
+        }
+        edited = st.data_editor(edit_df, column_config=col_config, use_container_width=True, num_rows="fixed", key="dm_emp_editor")
+        if st.button("💾 Save changes", type="primary", key="dm_emp_save"):
+            changed, errors = 0, []
+            for i in range(len(edited)):
+                if edit_df.iloc[i].to_dict() != edited.iloc[i].to_dict():
+                    fields = {}
+                    for k, v in edited.iloc[i].items():
+                        if k in editable_cols:
+                            if v == "" or (isinstance(v, float) and pd.isna(v)):
+                                fields[k] = None
+                            elif k in num_cols:
+                                try: fields[k] = float(v)
+                                except (TypeError, ValueError): fields[k] = v
+                            else:
+                                fields[k] = str(v).strip()
+                    try:
+                        client.update_record(base_id, emp_table, id_col.iloc[i], fields)
+                        changed += 1
+                    except Exception as ex:
+                        errors.append(f"{edited.iloc[i].get('Name', '?')}: {ex}")
+            if changed:
+                st.success(f"✅ Updated {changed}.")
+                st.cache_data.clear()
+                st.rerun()
+            for e in errors:
+                st.error(e)
+        with st.expander("➕ Add employee"):
+            with st.form("dm_add_emp"):
+                n1, n2 = st.columns(2)
+                with n1:
+                    na = st.text_input("Name", key="dm_emp_na")
+                    em = st.text_input("Email", key="dm_emp_em")
+                    sh = st.selectbox("Shop", shop_options, key="dm_emp_sh")
+                    pt = st.selectbox("Payment Type", payment_types, key="dm_emp_pt")
+                    sts = st.selectbox("Employment Status", ["Active", "Inactive"], key="dm_emp_sts")
+                with n2:
+                    hr = st.number_input("Hourly Rate", value=0.0, step=0.01, format="%.2f", key="dm_emp_hr")
+                    cr = st.number_input("Commission Rate", value=0.0, step=0.01, format="%.2f", key="dm_emp_cr")
+                    dt = st.number_input("Daily Transport", value=0.0, step=0.01, format="%.2f", key="dm_emp_dt")
+                if st.form_submit_button("Add"):
+                    if na and na.strip():
+                        flds = {"Name": na.strip(), "Shop": sh, "Payment Type": pt, "Employment Status": sts}
+                        if em.strip(): flds["Email"] = em.strip()
+                        if hr: flds["Hourly Rate Override"] = hr
+                        if cr: flds["Commission Rate"] = cr
+                        if dt: flds["Daily Transport"] = dt
+                        try:
+                            client.create_record(base_id, emp_table, flds)
+                            st.success("✅ Added.")
+                            st.cache_data.clear()
+                            st.rerun()
+                        except Exception as ex:
+                            st.error(str(ex))
+        to_del = st.multiselect("Delete", options=[r.get("Name", "?") for r in records], key="dm_emp_del")
+        if to_del and st.button("🗑️ Delete selected", key="dm_emp_del_btn"):
+            ids = [r["id"] for r in records if r.get("Name") in to_del]
+            if ids:
+                client.batch_delete_records(base_id, emp_table, ids)
+                st.success(f"✅ Deleted {len(ids)}.")
+                st.cache_data.clear()
+                st.rerun()
+    else:
+        st.warning("No employees. Add one:")
+        with st.form("dm_add_first_emp"):
+            na = st.text_input("Name", key="dm_first_na")
+            sh = st.selectbox("Shop", shop_options, key="dm_first_sh")
+            if st.form_submit_button("Add"):
+                if na and na.strip():
+                    client.create_record(base_id, emp_table, {"Name": na.strip(), "Shop": sh, "Payment Type": "hourly_only"})
+                    st.cache_data.clear()
+                    st.rerun()
+
+
+def _render_commission_tiers_tab(client, base_id, tables_cfg, shop_display, shop_options, config):
+    tiers_table = tables_cfg.get("commission_tiers", "Commission Tiers")
+    emp_table = tables_cfg.get("employees", "Employees")
+    name_to_id = _emp_name_to_id_map(client, base_id, emp_table, shop_display)
+    id_to_name = {v: k for k, v in name_to_id.items()}
+    formula = f'{{Shop (from Employees)}} = "{shop_display}"' if shop_display else None
+    try:
+        records = client.get_records_with_ids(base_id, tiers_table, formula=formula)
+    except Exception:
+        records = client.get_records_with_ids(base_id, tiers_table)
+    editable_cols = ["Tier Order", "Threshold", "Rate", "Max", "Net Sales Percentage", "Employees"]
+    num_cols = ("Tier Order", "Threshold", "Rate", "Max", "Net Sales Percentage")
+    if records:
+        rows = []
+        for r in records:
+            emp_ids = r.get("Employees") or []
+            emp_name = id_to_name.get(emp_ids[0]) if isinstance(emp_ids, list) and emp_ids else (emp_ids if isinstance(emp_ids, str) else "")
+            row = {"_id": r.get("id", ""), "Employees": emp_name or ""}
+            for c in ["Tier Order", "Threshold", "Rate", "Max", "Net Sales Percentage"]:
+                v = r.get(c)
+                row[c] = v if v is not None and v != "" else ("" if c != "Tier Order" else "1")
+            rows.append(row)
+        df = pd.DataFrame(rows)
+        id_col, edit_df = df["_id"], df.drop(columns=["_id"])
+        col_config = {
+            "Tier Order": st.column_config.NumberColumn("Tier Order", format="%.0f"),
+            "Threshold": st.column_config.NumberColumn("Threshold", format="%.2f"),
+            "Rate": st.column_config.NumberColumn("Rate", format="%.2f"),
+            "Max": st.column_config.NumberColumn("Max", format="%.2f"),
+            "Net Sales Percentage": st.column_config.NumberColumn("Net %", format="%.2f"),
+            "Employees": st.column_config.SelectboxColumn("Employee", options=sorted(name_to_id.keys())),
+        }
+        edited = st.data_editor(edit_df, column_config=col_config, use_container_width=True, num_rows="fixed", key="dm_ct_editor")
+        if st.button("💾 Save changes", type="primary", key="dm_ct_save"):
+            changed = 0
+            for i in range(len(edited)):
+                new = edited.iloc[i]
+                emp_name = str(new.get("Employees", "")).strip()
+                emp_id = name_to_id.get(emp_name)
+                fields = {"Tier Order": float(new.get("Tier Order") or 1), "Threshold": float(new.get("Threshold") or 0), "Rate": float(new.get("Rate") or 0)}
+                if new.get("Max") not in (None, "", float("nan")):
+                    try: fields["Max"] = float(new["Max"])
+                    except (TypeError, ValueError): pass
+                if new.get("Net Sales Percentage") not in (None, "", float("nan")):
+                    try: fields["Net Sales Percentage"] = float(new["Net Sales Percentage"])
+                    except (TypeError, ValueError): pass
+                if emp_id:
+                    fields["Employees"] = [emp_id]
+                try:
+                    client.update_record(base_id, tiers_table, id_col.iloc[i], fields)
+                    changed += 1
+                except Exception as ex:
+                    st.error(str(ex))
+            if changed:
+                st.cache_data.clear()
+                st.rerun()
+        with st.expander("➕ Add tier"):
+            with st.form("dm_add_ct"):
+                emp = st.selectbox("Employee", sorted(name_to_id.keys()), key="dm_ct_emp")
+                to = st.number_input("Tier Order", value=1, min_value=1, key="dm_ct_to")
+                th = st.number_input("Threshold", value=0.0, step=0.01, format="%.2f", key="dm_ct_th")
+                rt = st.number_input("Rate", value=0.0, step=0.01, format="%.2f", key="dm_ct_rt")
+                mx = st.number_input("Max (optional)", value=0.0, step=0.01, format="%.2f", key="dm_ct_mx")
+                if st.form_submit_button("Add"):
+                    flds = {"Tier Order": to, "Threshold": th, "Rate": rt, "Employees": [name_to_id[emp]]}
+                    if mx: flds["Max"] = mx
+                    client.create_record(base_id, tiers_table, flds)
+                    st.cache_data.clear()
+                    st.rerun()
+        to_del = st.multiselect("Delete rows by index", options=list(range(len(records))), key="dm_ct_del")
+        if to_del and st.button("🗑️ Delete selected", key="dm_ct_del_btn"):
+            ids = [id_col.iloc[i] for i in to_del]
+            client.batch_delete_records(base_id, tiers_table, ids)
+            st.cache_data.clear()
+            st.rerun()
+    else:
+        st.warning("No commission tiers. Add one:")
+        with st.form("dm_add_first_ct"):
+            emp = st.selectbox("Employee", sorted(name_to_id.keys()) if name_to_id else ["(No employees)"], key="dm_first_ct_emp")
+            if st.form_submit_button("Add") and emp and emp != "(No employees)":
+                client.create_record(base_id, tiers_table, {"Tier Order": 1, "Threshold": 0, "Rate": 0.2, "Employees": [name_to_id[emp]]})
+                st.cache_data.clear()
+                st.rerun()
+
+
+def _render_name_mappings_tab(client, base_id, tables_cfg, shop_display, shop_options, config):
+    mappings_table = tables_cfg.get("name_mappings", "Name Mappings")
+    emp_table = tables_cfg.get("employees", "Employees")
+    name_to_id = _emp_name_to_id_map(client, base_id, emp_table, shop_display)
+    emp_recs = client.get_employee_records_with_ids(base_id, emp_table, shop_display_name=None, active_only=False)
+    id_to_name = {r["id"]: r.get("Name", "") for r in emp_recs if r.get("Name")}
+    formula = f'{{Shop}} = "{shop_display}"' if shop_display else None
+    records = client.get_records_with_ids(base_id, mappings_table, formula=formula)
+    editable_cols = ["Report Name", "Employees", "Shop"]
+    if records:
+        rows = []
+        for r in records:
+            emp_ids = r.get("Employees") or []
+            emp_id = emp_ids[0] if isinstance(emp_ids, list) and emp_ids else (emp_ids if isinstance(emp_ids, str) else None)
+            emp_name = id_to_name.get(emp_id, "") if emp_id else ""
+            shop_val = r.get("Shop")
+            if isinstance(shop_val, list) and shop_val:
+                shop_str = str(shop_val[0])
+            else:
+                shop_str = str(shop_val) if shop_val else (shop_display or "")
+            rows.append({"_id": r.get("id"), "Report Name": r.get("Report Name") or "", "Employees": emp_name, "Shop": shop_str})
+        df = pd.DataFrame(rows)
+        id_col, edit_df = df["_id"], df.drop(columns=["_id"])
+        edited = st.data_editor(edit_df, column_config={"Report Name": st.column_config.TextColumn("Report Name"), "Employees": st.column_config.SelectboxColumn("Employee", options=sorted(name_to_id.keys())), "Shop": st.column_config.SelectboxColumn("Shop", options=shop_options)}, use_container_width=True, num_rows="fixed", key="dm_nm_editor")
+        if st.button("💾 Save changes", key="dm_nm_save"):
+            for i in range(len(edited)):
+                new = edited.iloc[i]
+                emp_id = name_to_id.get(str(new.get("Employees", "")).strip())
+                flds = {"Report Name": str(new.get("Report Name", "")).strip(), "Shop": new.get("Shop") or shop_display}
+                if emp_id:
+                    flds["Employees"] = [emp_id]
+                client.update_record(base_id, mappings_table, id_col.iloc[i], flds)
+            st.cache_data.clear()
+            st.rerun()
+        with st.expander("➕ Add mapping"):
+            with st.form("dm_add_nm"):
+                rn = st.text_input("Report Name", key="dm_nm_rn")
+                emp = st.selectbox("Employee", sorted(name_to_id.keys()), key="dm_nm_emp")
+                sh = st.selectbox("Shop", shop_options, key="dm_nm_sh")
+                if st.form_submit_button("Add") and rn and rn.strip():
+                    client.create_record(base_id, mappings_table, {"Report Name": rn.strip(), "Employees": [name_to_id[emp]], "Shop": sh})
+                    st.cache_data.clear()
+                    st.rerun()
+        to_del = st.multiselect("Delete", options=[r.get("Report Name", "?") for r in records], key="dm_nm_del")
+        if to_del and st.button("🗑️ Delete selected", key="dm_nm_del_btn"):
+            ids = [r["id"] for r in records if r.get("Report Name") in to_del]
+            if ids:
+                client.batch_delete_records(base_id, mappings_table, ids)
+                st.cache_data.clear()
+                st.rerun()
+    else:
+        st.warning("No name mappings.")
+        with st.form("dm_add_first_nm"):
+            rn = st.text_input("Report Name", key="dm_first_nm_rn")
+            emp = st.selectbox("Employee", sorted(name_to_id.keys()) if name_to_id else ["(None)"], key="dm_first_nm_emp")
+            if st.form_submit_button("Add") and rn and emp != "(None)":
+                client.create_record(base_id, mappings_table, {"Report Name": rn.strip(), "Employees": [name_to_id[emp]], "Shop": shop_display})
+                st.cache_data.clear()
+                st.rerun()
+
+
+def _render_sales_bonus_tab(client, base_id, tables_cfg, shop_display, shop_options, config):
+    bonus_table = tables_cfg.get("sales_bonus_thresholds", "Sales Bonus Thresholds")
+    emp_table = tables_cfg.get("employees", "Employees")
+    name_to_id = _emp_name_to_id_map(client, base_id, emp_table, shop_display)
+    emp_recs = client.get_employee_records_with_ids(base_id, emp_table, active_only=False)
+    id_to_name = {x["id"]: x.get("Name", "") for x in emp_recs}
+    formula = f'{{Shop}} = "{shop_display}"' if shop_display else None
+    records = client.get_records_with_ids(base_id, bonus_table, formula=formula)
+    months = ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"]
+    if records:
+        rows = []
+        for r in records:
+            emp_ids = r.get("Employees") or r.get("Employee")
+            emp_name = ""
+            if isinstance(emp_ids, list) and emp_ids:
+                emp_name = id_to_name.get(emp_ids[0], "")
+            elif isinstance(emp_ids, str):
+                emp_name = emp_ids
+            rows.append({"_id": r.get("id"), "Month": r.get("Month") or "", "Employees": emp_name, "Sales Threshold": r.get("Sales Threshold") or 0, "Bonus Amount": r.get("Bonus Amount") or 0})
+        df = pd.DataFrame(rows)
+        id_col, edit_df = df["_id"], df.drop(columns=["_id"])
+        edited = st.data_editor(edit_df, column_config={"Month": st.column_config.SelectboxColumn("Month", options=months), "Employees": st.column_config.SelectboxColumn("Employee", options=sorted(name_to_id.keys())), "Sales Threshold": st.column_config.NumberColumn("Sales Threshold", format="%.2f"), "Bonus Amount": st.column_config.NumberColumn("Bonus Amount", format="%.2f")}, use_container_width=True, num_rows="fixed", key="dm_sb_editor")
+        if st.button("💾 Save changes", key="dm_sb_save"):
+            for i in range(len(edited)):
+                new = edited.iloc[i]
+                emp_id = name_to_id.get(str(new.get("Employees", "")).strip())
+                flds = {"Month": str(new.get("Month", "")).strip().lower(), "Shop": shop_display, "Sales Threshold": float(new.get("Sales Threshold") or 0), "Bonus Amount": float(new.get("Bonus Amount") or 0)}
+                if emp_id:
+                    flds["Employees"] = [emp_id]
+                client.update_record(base_id, bonus_table, id_col.iloc[i], flds)
+            st.cache_data.clear()
+            st.rerun()
+        with st.expander("➕ Add threshold"):
+            with st.form("dm_add_sb"):
+                mon = st.selectbox("Month", months, key="dm_sb_mon")
+                emp = st.selectbox("Employee", sorted(name_to_id.keys()), key="dm_sb_emp")
+                st_val = st.number_input("Sales Threshold", value=0.0, step=100.0, format="%.2f", key="dm_sb_st")
+                ba_val = st.number_input("Bonus Amount", value=0.0, step=10.0, format="%.2f", key="dm_sb_ba")
+                if st.form_submit_button("Add"):
+                    client.create_record(base_id, bonus_table, {"Month": mon, "Shop": shop_display, "Employees": [name_to_id[emp]], "Sales Threshold": st_val, "Bonus Amount": ba_val})
+                    st.cache_data.clear()
+                    st.rerun()
+        del_opts = [f"{row['Month']}-{row['Employees']}-{row['Sales Threshold']}" for row in rows]
+        to_del = st.multiselect("Delete", options=del_opts, key="dm_sb_del")
+        if to_del and st.button("🗑️ Delete selected", key="dm_sb_del_btn"):
+            keys = {f"{row['Month']}-{row['Employees']}-{row['Sales Threshold']}": row["_id"] for row in rows}
+            ids = [keys[k] for k in to_del if k in keys]
+            if ids:
+                client.batch_delete_records(base_id, bonus_table, ids)
+                st.cache_data.clear()
+                st.rerun()
+    else:
+        st.warning("No sales bonus thresholds.")
+
+
+def _render_monthly_bonuses_tab(client, base_id, tables_cfg, shop_display, shop_options, config):
+    bonus_table = tables_cfg.get("monthly_bonus", "Monthly Bonuses")
+    emp_table = tables_cfg.get("employees", "Employees")
+    name_to_id = _emp_name_to_id_map(client, base_id, emp_table, shop_display)
+    emp_recs = client.get_employee_records_with_ids(base_id, emp_table, active_only=False)
+    id_to_name = {x["id"]: x.get("Name", "") for x in emp_recs}
+    formula = f'{{Shop}} = "{shop_display}"' if shop_display else None
+    records = client.get_records_with_ids(base_id, bonus_table, formula=formula)
+    bonus_fields = ["Daily Sales Bonus", "First Last Hour Bonus", "Social Media Bonus", "Management Bonus", "Management Consistency Bonus", "Transport Fuel", "Personal Sales Bonus", "Extra Bonus", "Daily Allowance", "Manual Hours", "Deductions", "Rent", "Advance"]
+    if records:
+        rows = []
+        for r in records:
+            emp_ids = r.get("Employees") or r.get("Employee")
+            emp_name = ""
+            if isinstance(emp_ids, list) and emp_ids:
+                emp_name = id_to_name.get(emp_ids[0], r.get("Employee", ""))
+            else:
+                emp_name = emp_ids or r.get("Employee", "")
+            row = {"_id": r.get("id"), "Month": r.get("Month") or "", "Employees": emp_name}
+            for bf in bonus_fields:
+                row[bf] = r.get(bf) or 0
+            rows.append(row)
+        df = pd.DataFrame(rows)
+        id_col, edit_df = df["_id"], df.drop(columns=["_id"])
+        col_cfg = {"Month": st.column_config.TextColumn("Month (YYYY-MM)"), "Employees": st.column_config.SelectboxColumn("Employee", options=sorted(name_to_id.keys()))}
+        for bf in bonus_fields:
+            col_cfg[bf] = st.column_config.NumberColumn(bf, format="%.2f")
+        edited = st.data_editor(edit_df, column_config=col_cfg, use_container_width=True, num_rows="fixed", key="dm_mb_editor")
+        if st.button("💾 Save changes", key="dm_mb_save"):
+            for i in range(len(edited)):
+                new = edited.iloc[i]
+                emp_id = name_to_id.get(str(new.get("Employees", "")).strip())
+                flds = {"Month": str(new.get("Month", "")).strip(), "Shop": shop_display}
+                if emp_id:
+                    flds["Employees"] = [emp_id]
+                for bf in bonus_fields:
+                    v = new.get(bf)
+                    flds[bf] = float(v) if v is not None and v != "" and not (isinstance(v, float) and pd.isna(v)) else 0
+                client.update_record(base_id, bonus_table, id_col.iloc[i], flds)
+            st.cache_data.clear()
+            st.rerun()
+        with st.expander("➕ Add monthly bonus"):
+            with st.form("dm_add_mb"):
+                mon = st.text_input("Month (YYYY-MM)", value=datetime.now().strftime("%Y-%m"), key="dm_mb_mon")
+                emp = st.selectbox("Employee", sorted(name_to_id.keys()), key="dm_mb_emp")
+                if st.form_submit_button("Add"):
+                    client.create_record(base_id, bonus_table, {"Month": mon, "Shop": shop_display, "Employees": [name_to_id[emp]]})
+                    st.cache_data.clear()
+                    st.rerun()
+        del_opts = [f"{row['Month']}-{row['Employees']}" for row in rows]
+        to_del = st.multiselect("Delete", options=del_opts, key="dm_mb_del")
+        if to_del and st.button("🗑️ Delete selected", key="dm_mb_del_btn"):
+            keys = {f"{row['Month']}-{row['Employees']}": row["_id"] for row in rows}
+            ids = [keys[k] for k in to_del if k in keys]
+            if ids:
+                client.batch_delete_records(base_id, bonus_table, ids)
+                st.cache_data.clear()
+                st.rerun()
+    else:
+        st.warning("No monthly bonuses.")
+
+
+def _render_wage_bracket_tab(client, base_id, tables_cfg):
+    wb_table = tables_cfg.get("uk_wage_bracket", "UK Wage Bracket")
+    records = client.get_records_with_ids(base_id, wb_table)
+    editable_cols = ["Age Band", "Hourly Rate", "Effective From", "Effective To"]
+    text_cols = ["Age Band", "Effective From", "Effective To"]
+    if records:
+        rows = []
+        for r in records:
+            row = {"_id": r.get("id")}
+            for c in editable_cols:
+                v = r.get(c)
+                if c == "Hourly Rate":
+                    row[c] = float(v) if v is not None and v != "" else 0.0
+                else:
+                    row[c] = v if v is not None and v != "" else ""
+            rows.append(row)
+        df = pd.DataFrame(rows)
+        id_col, edit_df = df["_id"], df.drop(columns=["_id"])
+        col_config = {c: st.column_config.TextColumn(c) for c in text_cols}
+        col_config["Hourly Rate"] = st.column_config.NumberColumn("Hourly Rate", format="%.2f")
+        edited = st.data_editor(edit_df, column_config=col_config, use_container_width=True, num_rows="fixed", key="dm_wb_editor")
+        if st.button("💾 Save changes", key="dm_wb_save"):
+            for i in range(len(edited)):
+                flds = {}
+                for c in editable_cols:
+                    v = edited.iloc[i][c]
+                    if c == "Hourly Rate":
+                        flds[c] = float(v) if v is not None and not (isinstance(v, float) and pd.isna(v)) else 0.0
+                    else:
+                        s = str(v).strip() if v is not None else ""
+                        flds[c] = s or None
+                client.update_record(base_id, wb_table, id_col.iloc[i], flds)
+            st.cache_data.clear()
+            st.rerun()
+        with st.expander("➕ Add bracket"):
+            with st.form("dm_add_wb"):
+                ab = st.text_input("Age Band (e.g. 21+)", key="dm_wb_ab")
+                hr = st.number_input("Hourly Rate", value=0.0, step=0.01, format="%.2f", key="dm_wb_hr")
+                ef = st.text_input("Effective From (YYYY-MM-DD)", key="dm_wb_ef")
+                et = st.text_input("Effective To (optional)", key="dm_wb_et")
+                if st.form_submit_button("Add") and ab and ab.strip():
+                    flds = {"Age Band": ab.strip(), "Hourly Rate": hr}
+                    if ef.strip(): flds["Effective From"] = ef.strip()
+                    if et.strip(): flds["Effective To"] = et.strip()
+                    client.create_record(base_id, wb_table, flds)
+                    st.cache_data.clear()
+                    st.rerun()
+        to_del = st.multiselect("Delete", options=[f"{r.get('Age Band')}-{r.get('Effective From')}" for r in records], key="dm_wb_del")
+        if to_del and st.button("🗑️ Delete selected", key="dm_wb_del_btn"):
+            keys = {f"{r.get('Age Band')}-{r.get('Effective From')}": r["id"] for r in records}
+            ids = [keys[k] for k in to_del if k in keys]
+            if ids:
+                client.batch_delete_records(base_id, wb_table, ids)
+                st.cache_data.clear()
+                st.rerun()
+    else:
+        st.warning("No wage brackets. Add one:")
+        with st.form("dm_add_first_wb"):
+            ab = st.text_input("Age Band", key="dm_first_wb_ab")
+            hr = st.number_input("Hourly Rate", value=11.44, step=0.01, format="%.2f", key="dm_first_wb_hr")
+            if st.form_submit_button("Add") and ab and ab.strip():
+                client.create_record(base_id, wb_table, {"Age Band": ab.strip(), "Hourly Rate": hr})
+                st.cache_data.clear()
+                st.rerun()
 
 
 def setup_authentication():
@@ -464,6 +1160,19 @@ def main():
     
     st.title("💰 Salary Calculation Dashboard")
     st.markdown("Calculate employee salaries for each shop based on uploaded reports")
+
+    # Make sidebar wider (Report Upload, Shop Select, etc.)
+    st.markdown(
+        """
+        <style>
+        [data-testid="stSidebar"][aria-expanded="true"] {
+            min-width: 380px !important;
+            max-width: 680px !important;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
     
     # Load configuration
     config = load_config()
@@ -482,6 +1191,16 @@ def main():
         st.session_state.selected_shop = selected_shop
         
         st.markdown("---")
+        api_key_check = (hasattr(st, "secrets") and st.secrets.get("airtable", {}).get("api_key")) or os.getenv("AIRTABLE_API_KEY") or st.session_state.get("airtable_api_key", "")
+        if not api_key_check:
+            st.warning("⚠️ Airtable API key required")
+            api_key_input = st.text_input("Airtable API key", type="password", key="airtable_api_key_sidebar", help="Set AIRTABLE_API_KEY env var or add to Streamlit secrets to skip")
+            if api_key_input:
+                st.session_state.airtable_api_key = api_key_input
+                st.success("✅ API key saved for this session")
+        else:
+            st.success("✅ Airtable API key found")
+        st.markdown("---")
         st.subheader("📁 Report Upload")
         
         # Only support file upload as the data source
@@ -490,6 +1209,90 @@ def main():
             type=['csv', 'xlsx'],
             help="Upload the salary report file from your computer"
         )
+        
+        # Save report buttons - persist to local disk or Google Drive
+        if uploaded_file is not None:
+            save_col1, save_col2 = st.columns(2)
+            with save_col1:
+                if st.button("💾 Save Locally", help="Save to this computer (lost on cloud restart)"):
+                    if _save_report(uploaded_file):
+                        st.success("✅ Saved locally!")
+                        st.cache_data.clear()
+                        st.rerun()
+                    else:
+                        st.error("Failed to save")
+            with save_col2:
+                gdrive_folder = _get_saved_reports_folder_id(selected_shop)
+                gdrive_client = _get_google_drive_client()
+                if gdrive_folder and gdrive_client:
+                    if st.button("☁️ Save to Google Drive", help="Save to Google Drive (persists on cloud)"):
+                        if _save_report_to_gdrive(uploaded_file, gdrive_folder):
+                            st.success("✅ Saved to Google Drive!")
+                            st.rerun()
+                        else:
+                            st.error("Failed to save to Drive")
+                elif gdrive_folder and not gdrive_client:
+                    st.caption("⚠️ Configure Google Drive credentials to save")
+        
+        # Saved reports selector - use previously saved report instead of re-uploading
+        saved_reports = _list_saved_reports()
+        if saved_reports:
+            st.caption("Or use a saved report:")
+            saved_options = ["(None - use upload above)"] + saved_reports
+            selected_idx = 0
+            if st.session_state.selected_saved_report and st.session_state.selected_saved_report in saved_reports:
+                selected_idx = saved_reports.index(st.session_state.selected_saved_report) + 1
+            chosen = st.selectbox(
+                "Saved Reports",
+                saved_options,
+                index=selected_idx,
+                key="saved_report_selector"
+            )
+            if chosen != "(None - use upload above)":
+                st.session_state.selected_saved_report = chosen
+            else:
+                st.session_state.selected_saved_report = None
+            if st.session_state.selected_saved_report:
+                if st.button("🗑️ Clear Selection", help="Clear saved report selection"):
+                    st.session_state.selected_saved_report = None
+                    st.rerun()
+        else:
+            st.session_state.selected_saved_report = None
+        
+        # Google Drive reports - load from Drive (persists on cloud, per-shop folder)
+        gdrive_folder = _get_saved_reports_folder_id(selected_shop)
+        gdrive_files = _list_gdrive_reports(gdrive_folder) if gdrive_folder else []
+        if gdrive_files:
+            st.caption(f"Or load from Google Drive ({shop_config.get('name', selected_shop)} folder):")
+            gdrive_options = ["(None)"] + [f["name"] for f in sorted(gdrive_files, key=lambda x: x.get("name", ""), reverse=True)]
+            gdrive_selected_idx = 0
+            if st.session_state.selected_gdrive_report:
+                names = [f["name"] for f in gdrive_files]
+                if st.session_state.selected_gdrive_report.get("name") in names:
+                    gdrive_selected_idx = names.index(st.session_state.selected_gdrive_report["name"]) + 1
+            gdrive_chosen = st.selectbox("Google Drive Reports", gdrive_options, index=gdrive_selected_idx, key="gdrive_report_selector")
+            if gdrive_chosen != "(None)":
+                match = next((f for f in gdrive_files if f["name"] == gdrive_chosen), None)
+                st.session_state.selected_gdrive_report = {"id": match["id"], "name": match["name"]} if match else None
+            else:
+                st.session_state.selected_gdrive_report = None
+            if st.session_state.selected_gdrive_report:
+                if st.button("🗑️ Clear Drive Selection", key="clear_gdrive"):
+                    st.session_state.selected_gdrive_report = None
+                    st.rerun()
+        else:
+            st.session_state.selected_gdrive_report = None
+        
+        # Effective file: uploaded > local saved > Google Drive saved
+        if uploaded_file is not None:
+            report_file = uploaded_file
+        elif st.session_state.selected_saved_report:
+            report_file = _load_saved_report(st.session_state.selected_saved_report)
+        elif st.session_state.selected_gdrive_report:
+            gdr = st.session_state.selected_gdrive_report
+            report_file = _load_gdrive_report(gdr["id"], gdr["name"])
+        else:
+            report_file = None
         
         st.markdown("---")
         st.subheader("📤 Airtable Export (Optional)")
@@ -562,51 +1365,203 @@ def main():
         """,
         unsafe_allow_html=True,
     )
-    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+        "Monthly Bonuses",
         "Calculate",
         "Results",
         "Airtable Preview",
-        "Monthly Adjustments",
         "Sales Target Tracker",
+        "Data Management",
     ])
     
     with tab1:
+        st.header("📝 Monthly Bonuses")
+        st.info("💡 Add bonuses per employee for each month. **Save** them, then go to **Calculate** to run salary calculations.")
+        
+        # Load employee configuration from Airtable
+        employees, bonuses, emp_config_full = load_employee_config(selected_shop)
+        
+        if not employees:
+            st.error("⚠️ Failed to load from Airtable. Check Base ID, API key, and that Employees table has records for this shop.")
+            st.stop()
+        
+        # Month/Year selector
+        col1, col2 = st.columns(2)
+        with col1:
+            selected_year = st.selectbox("Year", range(2024, 2027), index=1 if datetime.now().year == 2025 else 0, key="bonus_year")
+        with col2:
+            selected_month = st.selectbox("Month", range(1, 13), index=datetime.now().month - 1, key="bonus_month")
+        
+        month_name = datetime(selected_year, selected_month, 1).strftime('%B %Y')
+        month_key = f"{selected_year}-{selected_month:02d}"
+        shop_display_adj = shop_config.get("shop_display_name") or shop_config.get("name", selected_shop)
+        
+        # Sub-tabs: Monthly Bonuses (used in calculations) and Import CSV
+        sub_tab_bonus, sub_tab_import = st.tabs(["💰 Monthly Bonuses", "📤 Import CSV"])
+        
+        with sub_tab_bonus:
+            st.subheader(f"Monthly Bonuses for {month_name}")
+            st.caption("These bonuses are added to calculations when you run salary calculations.")
+            
+            # Load existing monthly bonuses
+            month_bonuses_data = load_monthly_bonuses(selected_shop, selected_year, selected_month, shop_filter_override=shop_display_adj)
+            
+            # Show saved vs unsaved counts
+            saved_employees = set(month_bonuses_data.keys())
+            all_employees = set(employees.keys())
+            unsaved = all_employees - saved_employees
+            st.info(f"**Saved:** {len(saved_employees)} employee(s)  •  **Not yet saved:** {len(unsaved)} employee(s)")
+            
+            # Employee selector with ✓ for saved employees
+            employee_options = [f"{name} ✓" if name in saved_employees else name for name in sorted(employees.keys())]
+            selected_display = st.selectbox(
+                "Select Employee",
+                employee_options,
+                key="bonus_employee_selector"
+            )
+            selected_employee_bonus = selected_display.replace(" ✓", "").strip() if selected_display else None
+            
+            if selected_employee_bonus:
+                base_bonuses = bonuses.get(selected_employee_bonus, {})
+                current_bonuses = month_bonuses_data.get(selected_employee_bonus, {})
+                if not current_bonuses:
+                    current_bonuses = base_bonuses.copy()
+                
+                st.markdown("---")
+                saved_badge = " ✓ Saved" if selected_employee_bonus in saved_employees else " (not yet saved)"
+                st.subheader(f"Bonuses for {selected_employee_bonus}{saved_badge}")
+                
+                with st.form(f"bonus_form_{selected_employee_bonus}"):
+                    c1, c2 = st.columns(2)
+                    with c1:
+                        st.markdown("### 💰 Bonuses")
+                        daily_sales_bonus = st.number_input("Daily Sales Bonus", value=float(current_bonuses.get('dailySalesBonus', 0)), step=1.0, key="b_daily_sales")
+                        first_last_hour = st.number_input("First/Last Hour Bonus", value=float(current_bonuses.get('firstLastHourBonus', 0)), step=1.0, key="b_first_last")
+                        social_media = st.number_input("Social Media Bonus", value=float(current_bonuses.get('socialMediaBonus', 0)), step=1.0, key="b_social_media")
+                        management = st.number_input("Management Bonus", value=float(current_bonuses.get('managementBonus', 0)), step=1.0, key="b_management")
+                        management_consistency = st.number_input("Management Consistency Bonus", value=float(current_bonuses.get('managementConsistencyBonus', 0)), step=1.0, key="b_mgmt_cons")
+                        transport_fuel = st.number_input("Transport/Fuel", value=float(current_bonuses.get('transportFuel', 0)), step=1.0, key="b_transport")
+                        personal_sales = st.number_input("Personal Sales Bonus", value=float(current_bonuses.get('personalSalesBonus', 0)), step=1.0, key="b_personal_sales")
+                        extra_bonus = st.number_input("Extra Bonus", value=float(current_bonuses.get('extraBonus', 0)), step=1.0, key="b_extra")
+                        daily_allowance = st.number_input("Daily Allowance", value=float(current_bonuses.get('dailyAllowance', 0)), step=1.0, key="b_daily_allowance")
+                    with c2:
+                        st.markdown("### 📊 Other")
+                        manual_hours = st.number_input("Manual Hours", value=float(current_bonuses.get('manualHours', 0)), step=0.5, key="b_manual_hours")
+                        deductions = st.number_input("Deductions", value=float(current_bonuses.get('deductions', 0)), step=1.0, key="b_deductions")
+                        rent = st.number_input("Rent", value=float(current_bonuses.get('rent', 0)), step=1.0, key="b_rent")
+                        base_advance = employees.get(selected_employee_bonus, {}).get('advance', 0)
+                        advance = st.number_input("Advance", value=float(current_bonuses.get('advance', base_advance)), step=1.0, key="b_advance")
+                    
+                    total_bonus = daily_sales_bonus + first_last_hour + social_media + management + management_consistency + transport_fuel + personal_sales + extra_bonus + daily_allowance
+                    st.markdown("---")
+                    st.metric("Total Bonus", format_currency(total_bonus))
+                    
+                    st.caption("💡 Save one employee at a time. After saving, the employee will show ✓ in the list above.")
+                    if st.form_submit_button("💾 Save to Monthly Bonuses"):
+                        if selected_employee_bonus not in month_bonuses_data:
+                            month_bonuses_data[selected_employee_bonus] = {}
+                        month_bonuses_data[selected_employee_bonus] = {
+                            'dailySalesBonus': daily_sales_bonus, 'firstLastHourBonus': first_last_hour,
+                            'socialMediaBonus': social_media, 'managementBonus': management,
+                            'managementConsistencyBonus': management_consistency, 'transportFuel': transport_fuel,
+                            'personalSalesBonus': personal_sales, 'extraBonus': extra_bonus,
+                            'dailyAllowance': daily_allowance, 'manualHours': manual_hours,
+                            'deductions': deductions, 'rent': rent, 'advance': advance
+                        }
+                        save_monthly_bonuses(selected_shop, selected_year, selected_month, month_bonuses_data, shop_filter_override=shop_display_adj)
+                        st.success(f"✅ Saved bonuses for {selected_employee_bonus} - {month_name}")
+                        st.cache_data.clear()
+                        st.rerun()
+            
+            if month_bonuses_data:
+                st.markdown("---")
+                st.subheader(f"All Bonuses for {month_name}")
+                bonus_data = []
+                for emp_name, emp_b in month_bonuses_data.items():
+                    tb = sum([emp_b.get('dailySalesBonus', 0), emp_b.get('firstLastHourBonus', 0), emp_b.get('socialMediaBonus', 0),
+                              emp_b.get('managementBonus', 0), emp_b.get('managementConsistencyBonus', 0), emp_b.get('transportFuel', 0),
+                              emp_b.get('personalSalesBonus', 0), emp_b.get('extraBonus', 0), emp_b.get('dailyAllowance', 0)])
+                    bonus_data.append({'Employee': emp_name, 'Total Bonus': format_currency(tb), 'Deductions': format_currency(emp_b.get('deductions', 0)),
+                                       'Rent': format_currency(emp_b.get('rent', 0)), 'Advance': format_currency(emp_b.get('advance', 0)), 'Manual Hours': emp_b.get('manualHours', 0)})
+                if bonus_data:
+                    st.dataframe(pd.DataFrame(bonus_data), width='stretch', hide_index=True)
+        
+        with sub_tab_import:
+            st.subheader("Import Monthly Bonuses from CSV")
+            st.caption("Upload a CSV (e.g. Monthly Bonuses-Grid view.csv from Airtable) to populate the Monthly Bonuses table.")
+            csv_file = st.file_uploader("Choose CSV file", type=["csv"], key="monthly_bonus_csv")
+            if csv_file:
+                csv_content = csv_file.read().decode("utf-8-sig")
+                import_col1, import_col2 = st.columns(2)
+                with import_col1:
+                    import_month = st.text_input("Month (YYYY-MM)", value=month_key, key="import_bonus_month")
+                with import_col2:
+                    if st.button("Import to Airtable"):
+                        base_id, api_key, _ = _get_airtable_credentials(selected_shop)
+                        if base_id and api_key:
+                            try:
+                                client = AirtableClient(api_key=api_key)
+                                tables = (load_config() or {}).get("airtable_config_tables", {})
+                                bonus_table = tables.get("monthly_bonus", "Monthly Bonuses")
+                                emp_table = tables.get("employees", "Employees")
+                                id_to_name = client._get_employee_id_to_name(base_id, emp_table, shop_display_adj)
+                                name_to_id = {v: k for k, v in id_to_name.items()}
+                                result = client.import_monthly_bonuses_from_csv(
+                                    base_id, bonus_table, csv_content, import_month,
+                                    employee_name_to_id=name_to_id,
+                                    shop_display_name=shop_display_adj,
+                                )
+                                if result.get("errors"):
+                                    st.error("Import had errors: " + "; ".join(result["errors"]))
+                                else:
+                                    st.success(f"✅ Imported {result.get('created', 0)} records. Skipped {result.get('skipped', 0)}.")
+                                    st.cache_data.clear()
+                                    st.rerun()
+                            except Exception as e:
+                                st.error(f"Import failed: {e}")
+                        else:
+                            st.warning("Airtable credentials required.")
+    
+    with tab2:
         st.header(f"💰 Calculate Salaries - {shop_config['name']}")
         
-        # Show current upload status
-        if uploaded_file is not None:
-            st.success(f"✅ File ready: **{uploaded_file.name}** ({uploaded_file.size:,} bytes)")
+        if report_file is not None:
+            st.success(f"✅ File ready: **{report_file.name}** ({report_file.size:,} bytes)")
         else:
-            st.info("📤 Please upload a report file using the sidebar")
+            st.info("📤 Please upload a report file or select a saved report using the sidebar")
         
         st.markdown("---")
         
         if st.button("🚀 Run Calculation", type="primary", use_container_width=False):
             with st.spinner("Processing..."):
                 try:
-                    # Load employee configuration
+                    # Load employee configuration from Airtable
                     employees, bonuses, emp_config_full = load_employee_config(selected_shop)
+                    if employees is None:
+                        st.error("❌ Failed to load from Airtable. Ensure Base ID is in config/shops.yaml and Airtable API key is set (env AIRTABLE_API_KEY, Streamlit secrets, or sidebar).")
+                        st.stop()
+                    
                     if not employees:
-                        st.error("Failed to load employee configuration")
+                        st.error("Failed to load employee configuration from Airtable. Check: Base ID in config/shops.yaml, API key (env/secrets/sidebar), and that Employees table has records for this shop.")
                         st.stop()
                     
-                    # Load data (file upload only)
-                    if uploaded_file is None:
-                        st.error("❌ Please upload a file from your computer using the sidebar")
+                    # Load data (file upload or saved report)
+                    if report_file is None:
+                        st.error("❌ Please upload a file or select a saved report using the sidebar")
                         st.stop()
                     
-                    st.info(f"📄 Processing file: **{uploaded_file.name}**")
+                    st.info(f"📄 Processing file: **{report_file.name}**")
                     
                     try:
-                        logger.info(f"Loading file: {uploaded_file.name}")
-                        if uploaded_file.name.endswith('.csv'):
+                        logger.info(f"Loading file: {report_file.name}")
+                        if report_file.name.endswith('.csv'):
                             # Read CSV as text first to handle variable column structure
                             logger.info("Reading CSV as text to handle variable column structure...")
-                            uploaded_file.seek(0)
+                            report_file.seek(0)
                             
                             # Read entire file as text
                             try:
-                                content = uploaded_file.read()
+                                content = report_file.read()
                                 if isinstance(content, bytes):
                                     # Try different encodings
                                     for encoding in ['utf-8', 'latin-1', 'cp1252']:
@@ -668,16 +1623,16 @@ def main():
                             except Exception as e:
                                 logger.error(f"Error reading CSV as text: {e}")
                                 # Fallback to pandas
-                                uploaded_file.seek(0)
+                                report_file.seek(0)
                                 encodings = ['utf-8', 'latin-1', 'cp1252']
                                 df = None
                                 
                                 for encoding in encodings:
                                     try:
-                                        uploaded_file.seek(0)
+                                        report_file.seek(0)
                                         try:
                                             df = pd.read_csv(
-                                                uploaded_file, 
+                                                report_file, 
                                                 encoding=encoding, 
                                                 header=None,
                                                 on_bad_lines='skip',
@@ -686,9 +1641,9 @@ def main():
                                             logger.info(f"Read CSV with {encoding} encoding (pandas 2.x): {df.shape}")
                                             break
                                         except TypeError:
-                                            uploaded_file.seek(0)
+                                            report_file.seek(0)
                                             df = pd.read_csv(
-                                                uploaded_file, 
+                                                report_file, 
                                                 encoding=encoding, 
                                                 header=None,
                                                 error_bad_lines=False,
@@ -705,7 +1660,7 @@ def main():
                                     raise Exception("Failed to read CSV with any method")
                         else:
                             logger.info("Reading Excel file...")
-                            df = pd.read_excel(uploaded_file)
+                            df = pd.read_excel(report_file)
                             logger.info(f"Successfully read Excel: {df.shape}")
                         
                         logger.info(f"File loaded: {len(df)} rows, {len(df.columns)} columns")
@@ -800,36 +1755,53 @@ def main():
                             if months:
                                 (year, month), _ = Counter((m.year, m.month) for m in months).most_common(1)[0]
                                 month_key = f"{year}-{month:02d}"
-                                month_adjustments = load_monthly_adjustments(selected_shop, year, month)
-                                logger.info("Monthly adjustments load: shop=%s, month=%s, count=%d", selected_shop, month_key, len(month_adjustments or {}))
+                                shop_display = shop_config.get("shop_display_name") or shop_config.get("name", selected_shop)
+                                month_bonuses = load_monthly_bonuses(
+                                    selected_shop, year, month, shop_filter_override=shop_display
+                                )
+                                logger.info("Monthly bonuses load: shop=%s, month=%s, count=%d", selected_shop, month_key, len(month_bonuses or {}))
                                 
-                                # Merge monthly adjustments with base bonuses (case-insensitive employee match)
-                                if month_adjustments:
+                                # Merge monthly bonuses with base bonuses (case-insensitive employee match)
+                                if month_bonuses:
                                     merged_bonuses = bonuses.copy()
                                     employees_lower_map = {e.lower(): e for e in employees.keys()}
-                                    for emp_from_at, emp_adjustments in month_adjustments.items():
+                                    for emp_from_at, emp_bonus_data in month_bonuses.items():
                                         # Match employee (Airtable may have different casing)
                                         emp_key = employees_lower_map.get((emp_from_at or '').lower())
                                         if emp_key:
-                                            merged_bonuses[emp_key].update(emp_adjustments)
+                                            merged_bonuses[emp_key].update(emp_bonus_data)
                                         else:
-                                            merged_bonuses[emp_from_at] = emp_adjustments
+                                            merged_bonuses[emp_from_at] = emp_bonus_data
                                     bonuses = merged_bonuses
                                     
-                                    for emp_from_at, emp_adjustments in month_adjustments.items():
+                                    for emp_from_at, emp_bonus_data in month_bonuses.items():
                                         emp_key = employees_lower_map.get((emp_from_at or '').lower())
-                                        if emp_key and 'advance' in emp_adjustments and emp_key in employees:
-                                            employees[emp_key]['advance'] = emp_adjustments['advance']
+                                        if emp_key and 'advance' in emp_bonus_data and emp_key in employees:
+                                            employees[emp_key]['advance'] = emp_bonus_data['advance']
                                     
-                                    st.info(f"📅 Loaded monthly adjustments for {datetime(year, month, 1).strftime('%B %Y')} ({len(month_adjustments)} employee(s))")
+                                    st.info(f"📅 Loaded monthly bonuses for {datetime(year, month, 1).strftime('%B %Y')} ({len(month_bonuses)} employee(s))")
                                 else:
-                                    st.warning(f"⚠️ No monthly adjustments found for {datetime(year, month, 1).strftime('%B %Y')}. Check the **Monthly Adjustments** table in Airtable has a row with **Shop** = `{selected_shop}` and **Month** = `{month_key}`.")
+                                    st.warning(f"⚠️ No monthly bonuses found for {datetime(year, month, 1).strftime('%B %Y')}. Add rows to the **Monthly Bonuses** table in Airtable with **Month** = `{month_key}` (and **Shop** if your table has it).")
                         except Exception as e:
                             logger.warning(f"Could not load monthly adjustments: {e}")
                             st.warning(f"⚠️ Could not load monthly adjustments: {e}")
                     
+                    # Load UK wage brackets from Airtable (for employees with DOB, no hourly override)
+                    wage_brackets = []
+                    base_id, api_key, _ = _get_airtable_credentials(selected_shop)
+                    if base_id and api_key:
+                        tables = (load_config() or {}).get("airtable_config_tables", {})
+                        bracket_table = tables.get("uk_wage_bracket", "UK Wage Bracket")
+                        try:
+                            at_client = AirtableClient(api_key=api_key)
+                            wage_brackets = at_client.get_wage_brackets(base_id, bracket_table)
+                            if wage_brackets:
+                                logger.info(f"Loaded {len(wage_brackets)} UK wage bracket rules from Airtable ({bracket_table})")
+                        except Exception as e:
+                            logger.warning(f"Could not load wage brackets from Airtable: {e}")
+                    
                     # Initialize calculation engine
-                    engine = CalculationEngine(employees, bonuses)
+                    engine = CalculationEngine(employees, bonuses, wage_brackets=wage_brackets)
                     
                     # Group records by employee
                     employee_records = {}
@@ -1131,11 +2103,11 @@ def main():
                 if not base_id or not table_name:
                     st.warning("⚠️ Please configure Base ID and Table name in config/shops.yaml")
     
-    with tab2:
+    with tab3:
         st.header("📊 Calculation Results")
         
         if not st.session_state.calculations_done:
-            st.info("👆 Go to the 'Calculate' tab and run a calculation first to see results here")
+            st.info("👆 Go to the **Calculate** tab and run a calculation first to see results here")
         else:
             results = st.session_state.results
             employees_config = st.session_state.get('employees_config', {})
@@ -1200,9 +2172,17 @@ def main():
                     ['Sales', format_currency(summary.get('Sales', 0))],
                     ['Additional Sales', format_currency(summary.get('AddlSales', 0))],
                     ['Adjusted Sales', format_currency(summary.get('AdjustedSales', 0))],
-                    ['Rate per Hour', format_currency(summary.get('RatePerHour', 0))],
                     ['Hours Salary', format_currency(summary.get('HoursSalary', 0))],
                 ]
+                wage_breakdown = summary.get('WageBracketBreakdown', [])
+                if not wage_breakdown:
+                    breakdown_data.insert(-1, ['Rate per Hour', format_currency(summary.get('RatePerHour', 0))])
+                if wage_breakdown:
+                    for i, period in enumerate(wage_breakdown, 1):
+                        date_from = period.get('date_from', '')
+                        date_to = period.get('date_to', '')
+                        label = f"{date_from} to {date_to}" if date_from != date_to else date_from
+                        breakdown_data.append([f"  Period {i} ({label})", f"{period.get('hours', 0):.2f} hrs × £{period.get('rate', 0):.2f} = {format_currency(period.get('pay', 0))}"])
                 
                 if summary.get('TotalCommission', 0) > 0:
                     breakdown_data.append(['Total Commission', format_currency(summary.get('TotalCommission', 0))])
@@ -1256,7 +2236,7 @@ def main():
                     st.caption(f"Employees without email in config (will be skipped): {', '.join(staff_without_email)}")
                 if st.button("Send to all staff (each gets their own breakdown)", key="send_all_staff"):
                     if not staff_with_email:
-                        st.error("No employees have email addresses in the config. Add emails to config/employees_*.yaml.")
+                        st.error("No employees have email addresses. Add Email field to employee records in Airtable.")
                     elif not default_from_email:
                         st.error("Please set from_email in config/shops.yaml under the shop's email section.")
                     else:
@@ -1435,11 +2415,11 @@ def main():
                                 else:
                                     st.error("Failed to send any management emails. Check email configuration and server logs.")
     
-    with tab3:
+    with tab4:
         st.header("📤 Airtable Export Preview")
         
         if not st.session_state.calculations_done:
-            st.info("👆 Go to the 'Calculate' tab and run a calculation first to see what will be exported to Airtable")
+            st.info("👆 Go to the **Calculate** tab and run a calculation first to see what will be exported to Airtable")
         else:
             if 'airtable_records' not in st.session_state or not st.session_state.airtable_records:
                 st.warning("⚠️ No Airtable records prepared. Please run a calculation first.")
@@ -1632,235 +2612,6 @@ Table Name: {repr(table_name)} (type: {type(table_name).__name__})
                     else:
                         st.info("🔑 Enter your Airtable API key above to enable export")
     
-    with tab4:
-        st.header("📝 Monthly Adjustments")
-        st.info("💡 Edit bonuses, deductions, rent, and advances for each employee for a specific month")
-        
-        # Load employee configuration
-        employees, bonuses, emp_config_full = load_employee_config(selected_shop)
-        
-        if not employees:
-            st.error("⚠️ Failed to load employee configuration. Please check the config files.")
-            st.stop()
-        
-        # Month/Year selector
-        col1, col2 = st.columns(2)
-        with col1:
-            selected_year = st.selectbox("Year", range(2024, 2027), index=1 if datetime.now().year == 2025 else 0)
-        with col2:
-            selected_month = st.selectbox("Month", range(1, 13), index=datetime.now().month - 1)
-        
-        month_name = datetime(selected_year, selected_month, 1).strftime('%B %Y')
-        st.subheader(f"Adjustments for {month_name}")
-        
-        # Load existing adjustments
-        adjustments = load_monthly_adjustments(selected_shop, selected_year, selected_month)
-        
-        # Get list of employees
-        if not employees:
-            st.warning("⚠️ Please load employee configuration first (go to Calculate tab)")
-        else:
-            # Employee selector
-            selected_employee_adj = st.selectbox(
-                "Select Employee",
-                list(employees.keys()),
-                key="adj_employee_selector"
-            )
-            
-            if selected_employee_adj:
-                # Get base bonuses for this employee
-                base_bonuses = bonuses.get(selected_employee_adj, {})
-                current_adjustments = adjustments.get(selected_employee_adj, {})
-                
-                # Initialize with base values if no adjustments exist
-                if not current_adjustments:
-                    current_adjustments = base_bonuses.copy()
-                
-                st.markdown("---")
-                st.subheader(f"Adjustments for {selected_employee_adj}")
-                
-                # Create form for editing
-                with st.form(f"adjustments_form_{selected_employee_adj}"):
-                    col1, col2 = st.columns(2)
-                    
-                    with col1:
-                        st.markdown("### 💰 Bonuses")
-                        daily_sales_bonus = st.number_input(
-                            "Daily Sales Bonus",
-                            value=float(current_adjustments.get('dailySalesBonus', 0)),
-                            step=1.0,
-                            key="daily_sales"
-                        )
-                        first_last_hour = st.number_input(
-                            "First/Last Hour Bonus",
-                            value=float(current_adjustments.get('firstLastHourBonus', 0)),
-                            step=1.0,
-                            key="first_last"
-                        )
-                        social_media = st.number_input(
-                            "Social Media Bonus",
-                            value=float(current_adjustments.get('socialMediaBonus', 0)),
-                            step=1.0,
-                            key="social_media"
-                        )
-                        management = st.number_input(
-                            "Management Bonus",
-                            value=float(current_adjustments.get('managementBonus', 0)),
-                            step=1.0,
-                            key="management"
-                        )
-                        management_consistency = st.number_input(
-                            "Management Consistency Bonus",
-                            value=float(current_adjustments.get('managementConsistencyBonus', 0)),
-                            step=1.0,
-                            key="management_consistency"
-                        )
-                        transport_fuel = st.number_input(
-                            "Transport/Fuel",
-                            value=float(current_adjustments.get('transportFuel', 0)),
-                            step=1.0,
-                            key="transport"
-                        )
-                        personal_sales = st.number_input(
-                            "Personal Sales Bonus",
-                            value=float(current_adjustments.get('personalSalesBonus', 0)),
-                            step=1.0,
-                            key="personal_sales"
-                        )
-                        extra_bonus = st.number_input(
-                            "Extra Bonus",
-                            value=float(current_adjustments.get('extraBonus', 0)),
-                            step=1.0,
-                            key="extra"
-                        )
-                        daily_allowance = st.number_input(
-                            "Daily Allowance",
-                            value=float(current_adjustments.get('dailyAllowance', 0)),
-                            step=1.0,
-                            key="daily_allowance"
-                        )
-                    
-                    with col2:
-                        st.markdown("### 📊 Other Adjustments")
-                        manual_hours = st.number_input(
-                            "Manual Hours",
-                            value=float(current_adjustments.get('manualHours', 0)),
-                            step=0.5,
-                            key="manual_hours"
-                        )
-                        deductions = st.number_input(
-                            "Deductions",
-                            value=float(current_adjustments.get('deductions', 0)),
-                            step=1.0,
-                            key="deductions"
-                        )
-                        rent = st.number_input(
-                            "Rent",
-                            value=float(current_adjustments.get('rent', 0)),
-                            step=1.0,
-                            key="rent"
-                        )
-                        # Get advance from adjustments or base config
-                        base_advance = employees.get(selected_employee_adj, {}).get('advance', 0)
-                        current_advance = current_adjustments.get('advance', base_advance)
-                        
-                        advance = st.number_input(
-                            "Advance",
-                            value=float(current_advance),
-                            step=1.0,
-                            key="advance"
-                        )
-                        
-                        # Show employee's advance from base config if different
-                        if base_advance != advance and base_advance > 0:
-                            st.info(f"💡 Base config has advance: £{base_advance:.2f}")
-                    
-                    # Calculate total bonus preview
-                    total_bonus = (
-                        daily_sales_bonus + first_last_hour + social_media + management +
-                        management_consistency + transport_fuel + personal_sales +
-                        extra_bonus + daily_allowance
-                    )
-                    
-                    st.markdown("---")
-                    col1, col2, col3 = st.columns(3)
-                    with col1:
-                        st.metric("Total Bonus", format_currency(total_bonus))
-                    with col2:
-                        st.metric("Total Deductions", format_currency(deductions + rent))
-                    with col3:
-                        st.metric("Advance", format_currency(advance))
-                    
-                    submitted = st.form_submit_button("💾 Save Adjustments", type="primary")
-                    
-                    if submitted:
-                        # Prepare adjustments dict
-                        if selected_employee_adj not in adjustments:
-                            adjustments[selected_employee_adj] = {}
-                        
-                        adjustments[selected_employee_adj] = {
-                            'dailySalesBonus': daily_sales_bonus,
-                            'firstLastHourBonus': first_last_hour,
-                            'socialMediaBonus': social_media,
-                            'managementBonus': management,
-                            'managementConsistencyBonus': management_consistency,
-                            'transportFuel': transport_fuel,
-                            'personalSalesBonus': personal_sales,
-                            'extraBonus': extra_bonus,
-                            'dailyAllowance': daily_allowance,
-                            'manualHours': manual_hours,
-                            'deductions': deductions,
-                            'rent': rent,
-                            'advance': advance
-                        }
-                        
-                        # Save to file
-                        save_monthly_adjustments(selected_shop, selected_year, selected_month, adjustments)
-                        st.success(f"✅ Adjustments saved for {selected_employee_adj} - {month_name}")
-                        st.cache_data.clear()  # Clear cache to reload on next calculation
-                        st.rerun()
-            
-            # Show all adjustments for the month
-            if adjustments:
-                st.markdown("---")
-                st.subheader(f"All Adjustments for {month_name}")
-                
-                # Create summary table
-                adj_data = []
-                for emp_name, emp_adj in adjustments.items():
-                    total_bonus = sum([
-                        emp_adj.get('dailySalesBonus', 0),
-                        emp_adj.get('firstLastHourBonus', 0),
-                        emp_adj.get('socialMediaBonus', 0),
-                        emp_adj.get('managementBonus', 0),
-                        emp_adj.get('managementConsistencyBonus', 0),
-                        emp_adj.get('transportFuel', 0),
-                        emp_adj.get('personalSalesBonus', 0),
-                        emp_adj.get('extraBonus', 0),
-                        emp_adj.get('dailyAllowance', 0)
-                    ])
-                    adj_data.append({
-                        'Employee': emp_name,
-                        'Total Bonus': format_currency(total_bonus),
-                        'Deductions': format_currency(emp_adj.get('deductions', 0)),
-                        'Rent': format_currency(emp_adj.get('rent', 0)),
-                        'Advance': format_currency(emp_adj.get('advance', 0)),
-                        'Manual Hours': emp_adj.get('manualHours', 0)
-                    })
-                
-                if adj_data:
-                    adj_df = pd.DataFrame(adj_data)
-                    st.dataframe(adj_df, width='stretch', hide_index=True)
-                    
-                    # Delete button
-                    if st.button("🗑️ Clear All Adjustments for This Month", type="secondary"):
-                        adjustments_path = Path(f"config/monthly_adjustments_{selected_shop}_{selected_year}-{selected_month:02d}.yaml")
-                        if adjustments_path.exists():
-                            adjustments_path.unlink()
-                            st.success("✅ All adjustments cleared")
-                            st.cache_data.clear()
-                            st.rerun()
-
     with tab5:
         st.header("🎯 Sales Target Tracker")
         st.info(
@@ -1912,7 +2663,7 @@ Table Name: {repr(table_name)} (type: {type(table_name).__name__})
             st.subheader("📋 Daily target (manager)")
             st.caption("Set who is working each day and each staff member’s individual sales target for that day.")
             shop_key_tracker = st.session_state.get("selected_shop", list(load_config().get("shops", {}).keys())[0])
-            employees_tracker, _, _ = load_employee_config(shop_key_tracker)
+            employees_tracker, _, _ = load_employee_config(shop_key_tracker) or ({}, {}, {})
             employee_names = list(employees_tracker.keys()) if employees_tracker else []
 
             daily_targets_config = load_daily_targets()
@@ -2191,6 +2942,60 @@ Table Name: {repr(table_name)} (type: {type(table_name).__name__})
                 else:
                     with status_col:
                         st.success("🟢 **Above target** – great progress!")
+
+    with tab6:
+        st.header("📋 Data Management")
+        st.info("Manage all Airtable config tables. Add, edit, or delete records. Changes are saved directly to Airtable.")
+
+        tables_cfg = (load_config() or {}).get("airtable_config_tables", {})
+        base_id, api_key, _ = _get_airtable_credentials(selected_shop)
+        shop_display = shop_config.get("shop_display_name") or shop_config.get("name", selected_shop)
+        shop_options = [s.get("shop_display_name") or s.get("name", k) for k, s in config["shops"].items()]
+        payment_types = [
+            "hourly_only", "commission_only", "manager",
+            "progressive_tiered_commission", "hybrid_daily_max",
+            "flat_rate_tiered_commission", "flat_rate_tiered_commission_with_transport",
+            "tiered_commission", "molly_commission", "alex_hybrid", "net_commission_tiered"
+        ]
+
+        if not base_id or not api_key:
+            st.error("❌ Airtable credentials not configured. Set Base ID in config/shops.yaml and API key in sidebar or secrets.")
+        else:
+            try:
+                client = AirtableClient(api_key=api_key)
+            except Exception as e:
+                st.error(f"❌ Failed to connect to Airtable: {e}")
+                client = None
+
+            if client:
+                dm_tab1, dm_tab2, dm_tab3, dm_tab4, dm_tab5, dm_tab6 = st.tabs([
+                    "Employees", "Commission Tiers", "Name Mappings",
+                    "Sales Bonus Thresholds", "Monthly Bonuses", "UK Wage Bracket",
+                ])
+
+                # --- Employees ---
+                with dm_tab1:
+                    _render_employees_tab(client, base_id, tables_cfg, shop_display, shop_options, payment_types, config)
+
+                # --- Commission Tiers ---
+                with dm_tab2:
+                    _render_commission_tiers_tab(client, base_id, tables_cfg, shop_display, shop_options, config)
+
+                # --- Name Mappings ---
+                with dm_tab3:
+                    _render_name_mappings_tab(client, base_id, tables_cfg, shop_display, shop_options, config)
+
+                # --- Sales Bonus Thresholds ---
+                with dm_tab4:
+                    _render_sales_bonus_tab(client, base_id, tables_cfg, shop_display, shop_options, config)
+
+                # --- Monthly Bonuses ---
+                with dm_tab5:
+                    _render_monthly_bonuses_tab(client, base_id, tables_cfg, shop_display, shop_options, config)
+
+                # --- UK Wage Bracket ---
+                with dm_tab6:
+                    _render_wage_bracket_tab(client, base_id, tables_cfg)
 
 if __name__ == "__main__":
     main()

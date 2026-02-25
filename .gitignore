@@ -58,6 +58,9 @@ Thumbs.db
 *.xls
 report.csv
 
+# Saved reports (user uploads persisted locally)
+saved_reports/
+
 # Documentation files (keep only essential ones)
 # Keep: README.md, DEPLOY_STREAMLIT_CLOUD.md
 AIRTABLE_DATA_RETRIEVAL.md

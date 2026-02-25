@@ -111,8 +111,24 @@ class EmailClient:
                         <tr><td>Additional Sales</td><td class="currency">{self.format_currency(summary.get('AddlSales', 0))}</td></tr>
                         <tr><td>Adjusted Sales</td><td class="currency">{self.format_currency(summary.get('AdjustedSales', 0))}</td></tr>
                         <tr><td>Average Sale per Day</td><td class="currency">{self.format_currency(summary.get('AvgSalePerDay', 0))}</td></tr>
+        """
+        wage_breakdown = summary.get('WageBracketBreakdown', [])
+        if not wage_breakdown:
+            html += f"""
                         <tr><td>Rate per Hour</td><td class="currency">{self.format_currency(summary.get('RatePerHour', 0))}</td></tr>
+        """
+        html += f"""
                         <tr><td>Hours Salary</td><td class="currency">{self.format_currency(summary.get('HoursSalary', 0))}</td></tr>
+        """
+        if wage_breakdown:
+            for i, period in enumerate(wage_breakdown, 1):
+                date_from = period.get('date_from', '')
+                date_to = period.get('date_to', '')
+                label = f"{date_from} to {date_to}" if date_from != date_to else date_from
+                html += f"""
+                        <tr><td style="padding-left: 12px;">Period {i} ({label})</td><td class="currency">{period.get('hours', 0):.2f} hrs × {self.format_currency(period.get('rate', 0))} = {self.format_currency(period.get('pay', 0))}</td></tr>
+        """
+        html += """
                     </table>
                 </div>
                 
@@ -245,6 +261,18 @@ class EmailClient:
         if bonus_detail_rows:
             bonus_section_html = f'<tr style="background: #f0f8ff; font-weight: bold; border-top: 2px solid #4caf50;"><td colspan="2" style="padding: 12px 8px;">🎁 BONUS BREAKDOWN</td></tr>{bonus_detail_rows}'
         
+        # Wage bracket breakdown (when rate varied mid-month, e.g. employee turned 18)
+        wage_breakdown_html = ""
+        wage_breakdown = summary.get('WageBracketBreakdown', [])
+        if wage_breakdown:
+            rows = "".join(
+                f'<tr><td style="padding-left: 20px;"><em>{p.get("date_from", "")} to {p.get("date_to", "")}:</em></td>'
+                f'<td class="amount">{p.get("hours", 0):.2f} hrs × {self.format_currency(p.get("rate", 0))} = {self.format_currency(p.get("pay", 0))}</td></tr>'
+                for p in wage_breakdown
+            )
+            wage_breakdown_html = f'<tr style="background: #f5f5f5; font-weight: bold; border-top: 2px solid #9e9e9e;"><td colspan="2" style="padding: 12px 8px;">📋 Wage Bracket Breakdown (rate varied mid-month)</td></tr>{rows}'
+        hourly_rate_row = "" if wage_breakdown else f'<tr><td><strong>Hourly Rate:</strong></td><td class="amount">{self.format_currency(summary.get("RatePerHour", 0))}</td></tr>'
+        
         # Deductions row
         deductions = summary.get('Deductions', 0) or 0
         deductions_html = ""
@@ -329,8 +357,9 @@ class EmailClient:
       <table>
         <tr><td><strong>Days Worked:</strong></td><td class="amount">{summary.get('WorkedDays', 0)} days</td></tr>
         <tr><td><strong>Total Hours:</strong></td><td class="amount">{summary.get('WorkedHours', 0):.2f} hours</td></tr>
-        <tr><td><strong>Hourly Rate:</strong></td><td class="amount">{self.format_currency(summary.get('RatePerHour', 0))}</td></tr>
+        {hourly_rate_row}
         <tr><td><strong>Hours Salary:</strong></td><td class="amount">{self.format_currency(hours_salary)}</td></tr>
+        {wage_breakdown_html}
         {bonus_section_html}
         {mid_row}
         {deductions_html}
@@ -503,6 +532,12 @@ class EmailClient:
                             <tr><td>Sales</td><td class="currency">{self.format_currency(summary.get('Sales', 0))}</td></tr>
                             <tr><td>Adjusted Sales</td><td class="currency">{self.format_currency(summary.get('AdjustedSales', 0))}</td></tr>
                             <tr><td>Hours Salary</td><td class="currency">{self.format_currency(summary.get('HoursSalary', 0))}</td></tr>
+            """
+            wage_breakdown = summary.get('WageBracketBreakdown', [])
+            if wage_breakdown:
+                for p in wage_breakdown:
+                    html += f'<tr><td style="padding-left: 12px;">{p.get("date_from", "")} to {p.get("date_to", "")}</td><td class="currency">{p.get("hours", 0):.2f} hrs × {self.format_currency(p.get("rate", 0))} = {self.format_currency(p.get("pay", 0))}</td></tr>'
+            html += """
                         </table>
                     </div>
                     <div class="bonus-section">

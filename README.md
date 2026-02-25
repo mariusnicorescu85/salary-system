@@ -1,10 +1,10 @@
 # Salary Calculation Dashboard
 
-A comprehensive dashboard system for calculating employee salaries across multiple shops (PYT, Opatra, Silverburn). This system replicates the functionality of your n8n workflows in a user-friendly web interface.
+A comprehensive dashboard system for calculating employee salaries across multiple shops (PYT, Opatra). This system replicates the functionality of your n8n workflows in a user-friendly web interface.
 
 ## Features
 
-- 📊 **Multi-Shop Support**: Calculate salaries for PYT, Opatra, and Silverburn
+- 📊 **Multi-Shop Support**: Calculate salaries for PYT and Opatra
 - 💰 **Flexible Payment Types**: Supports hourly, commission, tiered commission, and hybrid payment structures
 - 📁 **Google Drive Integration**: Download reports directly from Google Drive
 - 📤 **Airtable Integration**: Append daily breakdowns to Airtable automatically
@@ -67,11 +67,11 @@ A comprehensive dashboard system for calculating employee salaries across multip
 
 6. **Configure shops and employees**:
    - Edit `config/shops.yaml` to set Google Drive folder IDs and Airtable base IDs
-   - Edit `config/employees_pyt.yaml`, `config/employees_silverburn.yaml`, and `config/employees_opatra.yaml` to configure employee payment conditions
+   - Edit `config/employees_pyt.yaml` and `config/employees_opatra.yaml` to configure employee payment conditions
 
 7. **Email (sending salary breakdowns)** (optional):
    - In **Results** → **Email** you can send breakdowns to an employee or to management.
-   - Add SMTP credentials to `.streamlit/secrets.toml` using one section per shop: `[email_pyt]`, `[email_silverburn]`, `[email_opatra]`. Each needs `SMTP_USER` and `SMTP_PASSWORD` (for Gmail use an [App Password](https://myaccount.google.com/apppasswords)).
+   - Add SMTP credentials to `.streamlit/secrets.toml` using one section per shop: `[email_pyt]`, `[email_opatra]`. Each needs `SMTP_USER` and `SMTP_PASSWORD` (for Gmail use an [App Password](https://myaccount.google.com/apppasswords)).
    - Copy from `.streamlit/secrets.toml.example` (see the Email section at the bottom). For **Streamlit Cloud**, see **STREAMLIT_CLOUD_SECRETS.md** for where to paste secrets and the full template.
 
 ## Usage
@@ -133,7 +133,6 @@ salary_calculation_system/
 ├── config/
 │   ├── shops.yaml              # Shop configuration
 │   ├── employees_pyt.yaml      # PYT employee config
-│   ├── employees_silverburn.yaml  # Silverburn employee config
 │   └── employees_opatra.yaml   # Opatra employee config
 ├── src/
 │   ├── calculation_engine.py   # Salary calculation logic
