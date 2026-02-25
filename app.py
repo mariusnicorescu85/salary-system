@@ -1371,13 +1371,14 @@ def main():
         """,
         unsafe_allow_html=True,
     )
-    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
         "Monthly Bonuses",
         "Calculate",
         "Results",
         "Airtable Preview",
         "Sales Target Tracker",
         "Data Management",
+        "Shop Analytics",
     ])
     
     with tab1:
@@ -1909,6 +1910,8 @@ def main():
                     # Store employee configuration and shop key for later use (e.g. email sending)
                     st.session_state.employees_config = employees
                     st.session_state.results_shop_key = selected_shop
+                    st.session_state.calc_missing_employees = missing_employees
+                    st.session_state.calc_zero_calc_employees = zero_calc_employees
                     
                     # Always prepare Airtable records for preview (even if export is disabled)
                     # Include both daily records and monthly summary records with full breakdown
@@ -3151,6 +3154,219 @@ Table Name: {repr(table_name)} (type: {type(table_name).__name__})
                 # --- UK Wage Bracket ---
                 with dm_tab6:
                     _render_wage_bracket_tab(client, base_id, tables_cfg)
+
+    with tab7:
+        st.header("📊 Shop Analytics")
+        st.info(
+            "View analytics from report calculations (Employee, Period, Payment Type, wages, sales, etc.) "
+            "and save to Airtable to track progress over time."
+        )
+        with st.expander("ℹ️ Airtable setup", expanded=False):
+            st.markdown(
+                "Create a **Shop Analytics** table in your Airtable base with columns: "
+                "Employee, Shop, Period, PaymentType, WorkedDays, WorkedHours, HourlyRate, SalesPercentage, "
+                "BasePayment, TotalSales, AddlSales, AdjustedSales, SalesCommission, BonusPayment, FinalTotal, "
+                "AvgSalesPerDay, AvgSalesPerHour, Description, ConfigVersion, DataIssues, "
+                "SalaryToSalesPct, SalesShareOfShop, SalaryShareOfShop. "
+                "Table name is set in config (shop_analytics). A SHOP_METRICS summary row is included."
+            )
+
+        analytics_sub1, analytics_sub2 = st.tabs(["Current Report", "Historical (from Airtable)"])
+
+        with analytics_sub1:
+            if not st.session_state.calculations_done:
+                st.info("👆 Run a calculation in the **Calculate** tab first. The analytics table will be built from those results.")
+            else:
+                results = st.session_state.results
+                results_shop_key = st.session_state.get("results_shop_key") or selected_shop
+                shop_config_analytics = config["shops"].get(results_shop_key, shop_config)
+                shop_display_analytics = shop_config_analytics.get("shop_display_name") or shop_config_analytics.get("name", results_shop_key)
+
+                # Compute shop totals for share metrics
+                shop_total_sales = sum(d["summary"].get("Sales", 0) for d in results.values())
+                shop_total_salary = sum(d["summary"].get("FinalPayment", 0) for d in results.values())
+                employees_config_analytics = st.session_state.get("employees_config", {})
+                missing_emp = st.session_state.get("calc_missing_employees", [])
+                zero_calc_emp = st.session_state.get("calc_zero_calc_employees", [])
+
+                def _sales_percentage(emp_name: str, payment_type: str) -> str:
+                    """Human-readable sales % from payment config (matches n8n workflow)."""
+                    cfg = employees_config_analytics.get(emp_name, {})
+                    if payment_type == "commission_only" or payment_type == "CommissionOnly":
+                        rate = cfg.get("commission_rate") or 0
+                        return f"{rate * 100:.1f}%" if rate > 0 else "N/A"
+                    if payment_type in ("progressive_tiered_commission", "ProgressiveTieredCommission"):
+                        return "Progressive 20-25%"
+                    if payment_type in ("flat_rate_tiered_commission", "FlatRateTieredCommission"):
+                        return "Flat 32-33%"
+                    if payment_type in ("flat_rate_tiered_commission_with_transport", "FlatRateTieredWithTransport"):
+                        return "30-35% + Transport"
+                    if payment_type in ("net_commission_tiered", "NetCommissionTiered"):
+                        return "NET 30-33%"
+                    if payment_type in ("alex_hybrid", "AlexOldStructure", "AlexNewStructure"):
+                        return "25-27% + Rent"
+                    if payment_type in ("hybrid_daily_max", "HybridDailyMax"):
+                        return "Progressive/Hourly Max"
+                    if payment_type in ("tiered_commission", "MonthlyMaxLater"):
+                        return "Tiered/Hourly Max"
+                    if payment_type in ("molly_commission", "MollyCommission"):
+                        return "30-35% NET"
+                    if payment_type in ("hourly_only", "manager", "HourlyOnly"):
+                        return "Hourly"
+                    return payment_type or "N/A"
+
+                def _pay_description(emp_name: str, payment_type: str) -> str:
+                    """Human-readable pay structure description."""
+                    cfg = employees_config_analytics.get(emp_name, {})
+                    if cfg.get("description"):
+                        return str(cfg["description"])
+                    return _sales_percentage(emp_name, payment_type)
+
+                # Build analytics rows
+                analytics_rows = []
+                for emp_name, emp_data in results.items():
+                    summary = emp_data["summary"]
+                    emp_sales = summary.get("Sales", 0) or 0
+                    emp_final = summary.get("FinalPayment", 0) or 0
+                    worked_hours = summary.get("WorkedHours", 0) or 0
+
+                    # Period from first daily record
+                    employee_daily = [c for c in st.session_state.get("all_daily_calculations", []) if c.get("Employee") == emp_name]
+                    month_period = ""
+                    if employee_daily:
+                        try:
+                            first_date = datetime.strptime(employee_daily[0]["Date"], "%Y-%m-%d")
+                            month_period = first_date.strftime("%Y-%m")
+                        except Exception:
+                            pass
+
+                    salary_to_sales_pct = (emp_final / emp_sales * 100) if emp_sales > 0 else 0
+                    sales_share = (emp_sales / shop_total_sales * 100) if shop_total_sales > 0 else 0
+                    salary_share = (emp_final / shop_total_salary * 100) if shop_total_salary > 0 else 0
+                    avg_sales_per_hour = (emp_sales / worked_hours) if worked_hours > 0 else 0
+
+                    payment_type = summary.get("PaymentType", "")
+                    data_issues = []
+                    if emp_name in missing_emp:
+                        data_issues.append("Missing from config")
+                    if emp_name in zero_calc_emp:
+                        data_issues.append("Zero calculation")
+                    data_issues_str = "; ".join(data_issues) if data_issues else "None"
+
+                    analytics_rows.append({
+                        "Employee": emp_name,
+                        "Shop": shop_display_analytics,
+                        "Period": month_period,
+                        "PaymentType": payment_type,
+                        "WorkedDays": summary.get("WorkedDays", 0),
+                        "WorkedHours": round(worked_hours, 2),
+                        "HourlyRate": round(summary.get("RatePerHour", 0), 2),
+                        "SalesPercentage": _sales_percentage(emp_name, payment_type),
+                        "BasePayment": round(summary.get("HoursSalary", 0), 2),
+                        "TotalSales": round(emp_sales, 2),
+                        "AddlSales": round(summary.get("AddlSales", 0), 2),
+                        "AdjustedSales": round(summary.get("AdjustedSales", 0), 2),
+                        "SalesCommission": round(summary.get("TotalCommission", 0), 2),
+                        "BonusPayment": round(summary.get("TotalBonus", 0), 2),
+                        "FinalTotal": round(emp_final, 2),
+                        "AvgSalesPerDay": round(summary.get("AvgSalePerDay", 0), 2),
+                        "AvgSalesPerHour": round(avg_sales_per_hour, 2),
+                        "Description": _pay_description(emp_name, payment_type),
+                        "ConfigVersion": f"{datetime.now().year}-v1",
+                        "DataIssues": data_issues_str,
+                        "SalaryToSalesPct": round(salary_to_sales_pct, 2),
+                        "SalesShareOfShop": round(sales_share, 2),
+                        "SalaryShareOfShop": round(salary_share, 2),
+                    })
+
+                # Add SHOP_METRICS summary row (matches n8n workflow)
+                total_worked_days = sum(d["summary"].get("WorkedDays", 0) for d in results.values())
+                total_worked_hours = sum(d["summary"].get("WorkedHours", 0) for d in results.values())
+                shop_total_sales_only = sum(d["summary"].get("Sales", 0) for d in results.values())
+                shop_total_addl = sum(d["summary"].get("AddlSales", 0) for d in results.values())
+                shop_efficiency = (shop_total_salary / shop_total_sales * 100) if shop_total_sales > 0 else 0
+                month_period_shop = (analytics_rows[0]["Period"] if analytics_rows else "") or datetime.now().strftime("%Y-%m")
+
+                analytics_rows.append({
+                    "Employee": "SHOP_METRICS",
+                    "Shop": shop_display_analytics,
+                    "Period": month_period_shop,
+                    "PaymentType": "ALL_TYPES",
+                    "WorkedDays": total_worked_days,
+                    "WorkedHours": round(total_worked_hours, 2),
+                    "HourlyRate": 0,
+                    "SalesPercentage": "N/A",
+                    "BasePayment": 0,
+                    "TotalSales": round(shop_total_sales_only, 2),
+                    "AddlSales": round(shop_total_addl, 2),
+                    "AdjustedSales": round(shop_total_sales, 2),
+                    "SalesCommission": 0,
+                    "BonusPayment": 0,
+                    "FinalTotal": round(shop_total_salary, 2),
+                    "AvgSalesPerDay": round(shop_total_sales / total_worked_days, 2) if total_worked_days > 0 else 0,
+                    "AvgSalesPerHour": round(shop_total_sales / total_worked_hours, 2) if total_worked_hours > 0 else 0,
+                    "Description": f"Shop efficiency: {shop_efficiency:.2f}%",
+                    "ConfigVersion": "SHOP-v1",
+                    "DataIssues": "None",
+                    "SalaryToSalesPct": round(shop_efficiency, 2),
+                    "SalesShareOfShop": 100.0,
+                    "SalaryShareOfShop": 100.0,
+                })
+
+                analytics_df = pd.DataFrame(analytics_rows)
+                st.dataframe(analytics_df, use_container_width=True, height=400)
+
+                # Save to Airtable
+                st.markdown("---")
+                st.subheader("Save to Airtable")
+                tables_cfg_analytics = (load_config() or {}).get("airtable_config_tables", {})
+                analytics_table = tables_cfg_analytics.get("shop_analytics", "Shop Analytics")
+                base_id_analytics = shop_config_analytics.get("airtable_base_id", "")
+                base_id, api_key_analytics, _ = _get_airtable_credentials(results_shop_key)
+
+                if base_id_analytics and api_key_analytics:
+                    if st.button("Save analytics to Airtable", key="save_analytics_btn"):
+                        try:
+                            at_client_analytics = AirtableClient(api_key=api_key_analytics)
+                            result = at_client_analytics.save_shop_analytics(
+                                base_id_analytics, analytics_table, analytics_rows
+                            )
+                            st.success(f"Saved {result.get('records_created', 0)} analytics records to Airtable.")
+                        except Exception as e:
+                            st.error(f"Failed to save: {e}")
+                            import traceback
+                            with st.expander("Details"):
+                                st.code(traceback.format_exc())
+                else:
+                    st.warning("Configure Airtable Base ID and API key for this shop to save analytics.")
+
+        with analytics_sub2:
+            st.subheader("Historical analytics from Airtable")
+            base_id_hist, api_key_hist, _ = _get_airtable_credentials(selected_shop)
+            shop_display_hist = shop_config.get("shop_display_name") or shop_config.get("name", selected_shop)
+            tables_cfg_hist = (load_config() or {}).get("airtable_config_tables", {})
+            analytics_table_hist = tables_cfg_hist.get("shop_analytics", "Shop Analytics")
+
+            if not base_id_hist or not api_key_hist:
+                st.warning("Configure Airtable credentials to load historical analytics.")
+            else:
+                period_filter = st.text_input("Period (e.g. 2025-02)", key="analytics_period_filter", placeholder="Leave empty for all")
+                if st.button("Load analytics", key="load_analytics_btn"):
+                    try:
+                        at_client_hist = AirtableClient(api_key=api_key_hist)
+                        records = at_client_hist.get_shop_analytics(
+                            base_id_hist, analytics_table_hist,
+                            shop=shop_display_hist,
+                            period=period_filter.strip() if period_filter else None,
+                        )
+                        if records:
+                            hist_df = pd.DataFrame(records)
+                            st.dataframe(hist_df, use_container_width=True, height=400)
+                            st.success(f"Loaded {len(records)} records.")
+                        else:
+                            st.info("No analytics records found. Save from Current Report first.")
+                    except Exception as e:
+                        st.error(f"Failed to load: {e}")
 
 if __name__ == "__main__":
     main()

@@ -1238,3 +1238,37 @@ class AirtableClient:
         except Exception:
             return []
         return [{"id": rec["id"], **rec.get("fields", {})} for rec in rows]
+
+    def save_shop_analytics(
+        self,
+        base_id: str,
+        table_name: str,
+        records: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        """
+        Append shop analytics records to Airtable.
+        records: list of dicts with field names matching Shop Analytics table columns.
+        """
+        if not records:
+            return {"success": True, "records_created": 0}
+        return self.append_records(base_id, table_name, records)
+
+    def get_shop_analytics(
+        self,
+        base_id: str,
+        table_name: str,
+        shop: Optional[str] = None,
+        period: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        Load shop analytics from Airtable.
+        shop: filter by Shop field (e.g. "Opatra", "PYT")
+        period: filter by Period field (e.g. "2025-02")
+        """
+        formula_parts = []
+        if shop:
+            formula_parts.append(f'{{Shop}} = "{shop}"')
+        if period:
+            formula_parts.append(f'{{Period}} = "{period}"')
+        formula = "AND(" + ", ".join(formula_parts) + ")" if formula_parts else None
+        return self.get_records_with_ids(base_id, table_name, formula=formula)
