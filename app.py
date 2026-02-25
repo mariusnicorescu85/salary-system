@@ -9,7 +9,7 @@ import yaml
 import json
 from pathlib import Path
 from typing import Dict, List, Optional
-from datetime import datetime
+from datetime import datetime, timedelta
 import io
 import logging
 import sys
@@ -76,6 +76,12 @@ if 'target_current_date' not in st.session_state:
     st.session_state.target_current_date = datetime.today().date()
 if 'daily_target_date' not in st.session_state:
     st.session_state.daily_target_date = datetime.today().date()
+if 'wage_vs_sales_date' not in st.session_state:
+    st.session_state.wage_vs_sales_date = datetime.today().date()
+if 'wvs_range_start' not in st.session_state:
+    st.session_state.wvs_range_start = datetime.today().date()
+if 'wvs_range_end' not in st.session_state:
+    st.session_state.wvs_range_end = datetime.today().date()
 if 'selected_saved_report' not in st.session_state:
     st.session_state.selected_saved_report = None
 if 'selected_gdrive_report' not in st.session_state:
@@ -2621,7 +2627,7 @@ Table Name: {repr(table_name)} (type: {type(table_name).__name__})
         )
 
         # Sub-tabs for Sales Target Tracker (add new tab names here to extend)
-        sub_tab_names = ["📋 Daily Target Manager", "🏪 Shop Target Monthly"]
+        sub_tab_names = ["📋 Daily Target Manager", "🏪 Shop Target Monthly", "📊 Wage vs Sales"]
         sales_sub_tabs = st.tabs(sub_tab_names)
 
         with sales_sub_tabs[0]:
@@ -2949,6 +2955,148 @@ Table Name: {repr(table_name)} (type: {type(table_name).__name__})
                     else:
                         with status_col:
                             st.success("🟢 **Above target** – great progress!")
+
+        with sales_sub_tabs[2]:
+            # --- Wage vs Sales (daily or interval) ---
+            st.subheader("📊 Wage vs Sales Ratio")
+            st.caption(
+                "Enter hours worked and sales per staff. The system calculates wages using wage brackets, "
+                "hourly overrides, and commission structures, then shows the wage % of total sales. Target: 25%."
+            )
+
+            shop_key_wvs = st.session_state.get("selected_shop", list(load_config().get("shops", {}).keys())[0])
+            employees_wvs, bonuses_wvs, _ = load_employee_config(shop_key_wvs) or ({}, {}, {})
+            employee_names_wvs = list(employees_wvs.keys()) if employees_wvs else []
+
+            if not employees_wvs:
+                st.warning("No employees loaded for this shop. Check Airtable configuration.")
+            else:
+                wvs_mode = st.radio(
+                    "Period",
+                    options=["Single day", "Date range"],
+                    key="wvs_mode",
+                    horizontal=True,
+                    help="Choose a single day or a date range (interval) to enter data for.",
+                )
+
+                if wvs_mode == "Single day":
+                    wvs_start = st.date_input(
+                        "Date",
+                        value=st.session_state.get("wage_vs_sales_date", datetime.today().date()),
+                        key="wage_vs_sales_date",
+                        help="The day you are entering data for.",
+                    )
+                    wvs_dates = [wvs_start]
+                else:
+                    col_start, col_end = st.columns(2)
+                    with col_start:
+                        wvs_start = st.date_input(
+                            "Start date",
+                            value=st.session_state.get("wvs_range_start", datetime.today().date()),
+                            key="wvs_range_start",
+                        )
+                    with col_end:
+                        wvs_end = st.date_input(
+                            "End date",
+                            value=st.session_state.get("wvs_range_end", datetime.today().date()),
+                            key="wvs_range_end",
+                        )
+                    if wvs_end < wvs_start:
+                        st.warning("End date must be on or after start date.")
+                        wvs_dates = []
+                    else:
+                        num_days = (wvs_end - wvs_start).days + 1
+                        if num_days > 31:
+                            st.warning("Maximum 31 days per range. Please shorten the interval.")
+                            wvs_dates = []
+                        else:
+                            wvs_dates = [wvs_start + timedelta(days=i) for i in range(num_days)]
+
+                # Load wage brackets and engine once
+                wage_brackets_wvs = []
+                base_id_wvs, api_key_wvs, _ = _get_airtable_credentials(shop_key_wvs)
+                if base_id_wvs and api_key_wvs:
+                    tables_cfg_wvs = (load_config() or {}).get("airtable_config_tables", {})
+                    bracket_table = tables_cfg_wvs.get("uk_wage_bracket", "UK Wage Bracket")
+                    try:
+                        at_client_wvs = AirtableClient(api_key=api_key_wvs)
+                        wage_brackets_wvs = at_client_wvs.get_wage_brackets(base_id_wvs, bracket_table)
+                    except Exception:
+                        pass
+                engine_wvs = CalculationEngine(employees_wvs, bonuses_wvs or {}, wage_brackets=wage_brackets_wvs)
+
+                total_wages_wvs = 0.0
+                total_sales_wvs = 0.0
+
+                for d in wvs_dates:
+                    date_str_wvs = d.strftime("%Y-%m-%d")
+                    day_label = d.strftime("%a %d %b") if wvs_mode == "Date range" else "Hours & sales per staff"
+                    with st.expander(f"**{day_label}** ({date_str_wvs})", expanded=(wvs_mode == "Single day" or len(wvs_dates) <= 7)):
+                        staff_working_wvs = st.multiselect(
+                            "Staff working",
+                            options=employee_names_wvs,
+                            default=[],
+                            key=f"wvs_staff_{date_str_wvs}",
+                            help="Select everyone who worked on this date.",
+                        )
+                        wvs_data = {}
+                        for name in staff_working_wvs:
+                            c1, c2 = st.columns(2)
+                            with c1:
+                                hours_val = st.number_input(
+                                    f"Hours – {name}",
+                                    min_value=0.0,
+                                    step=0.5,
+                                    value=0.0,
+                                    format="%.1f",
+                                    key=f"wvs_hours_{date_str_wvs}_{name}",
+                                )
+                            with c2:
+                                sales_val = st.number_input(
+                                    f"Sales (£) – {name}",
+                                    min_value=0.0,
+                                    step=50.0,
+                                    value=0.0,
+                                    format="%.2f",
+                                    key=f"wvs_sales_{date_str_wvs}_{name}",
+                                )
+                            wvs_data[name] = {"hours": hours_val, "sales": sales_val}
+
+                        for name, data in wvs_data.items():
+                            hours = data["hours"]
+                            sales = data["sales"]
+                            if hours > 0 or sales > 0:
+                                daily_calc = engine_wvs.calculate_daily_payment(
+                                    name, hours, sales, 0.0, date_str_wvs
+                                )
+                                total_wages_wvs += daily_calc.get("Base", 0) + daily_calc.get("Commission", 0)
+                                total_sales_wvs += sales
+
+                wage_pct = (total_wages_wvs / total_sales_wvs * 100) if total_sales_wvs > 0 else 0.0
+                target_pct = 25.0
+
+                st.markdown("---")
+                st.markdown("### Result")
+                period_label = "period" if wvs_mode == "Date range" else "daily"
+                col_a, col_b, col_c = st.columns(3)
+                with col_a:
+                    st.metric(f"Total wages ({period_label})", format_currency(total_wages_wvs))
+                with col_b:
+                    st.metric("Total sales", format_currency(total_sales_wvs))
+                with col_c:
+                    st.metric("Wage % of sales", f"{wage_pct:.1f}%")
+
+                if total_sales_wvs > 0:
+                    if wage_pct < target_pct - 1:
+                        st.success("🟢 **Under target** – wages are below 25% of sales.")
+                    elif wage_pct <= target_pct + 1:
+                        st.info("🟡 **On target** – wages are around 25% of sales.")
+                    else:
+                        st.error("🔴 **Over target** – wages are above 25% of sales.")
+                else:
+                    st.info("Enter hours and sales above to see the wage % and target indicator.")
+
+                st.caption("💡 Save to Airtable will be available in a future update.")
 
     with tab6:
         st.header("📋 Data Management")
