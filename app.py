@@ -2475,10 +2475,11 @@ def main():
                 # Daily breakdown
                 st.subheader("Daily Breakdown")
                 daily_df = pd.DataFrame(daily)
-                st.dataframe(daily_df, width='stretch')
+                num_cols_config = {c: st.column_config.NumberColumn(c, format="%.2f") for c in ('Hours', 'Sales', 'AddlSales', 'HrlyRate', 'Base', 'Commission') if c in daily_df.columns}
+                st.dataframe(daily_df, width='stretch', column_config=num_cols_config)
                 
                 # Download button
-                csv = daily_df.to_csv(index=False)
+                csv = daily_df.to_csv(index=False, float_format="%.2f")
                 st.download_button(
                     label="Download Daily Breakdown CSV",
                     data=csv,

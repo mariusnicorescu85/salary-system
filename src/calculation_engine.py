@@ -318,6 +318,10 @@ class CalculationEngine:
             else:
                 result['PaymentType'] = 'AlexNewStructure'
         
+        # Round all monetary/numeric values to 2 decimal places
+        for key in ('Hours', 'Sales', 'AddlSales', 'HrlyRate', 'Base', 'Commission'):
+            if key in result and isinstance(result[key], (int, float)):
+                result[key] = round(float(result[key]), 2)
         return result
     
     def calculate_monthly_summary(self, daily_records: List[Dict]) -> Dict:
