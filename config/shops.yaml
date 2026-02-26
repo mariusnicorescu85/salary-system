@@ -23,7 +23,7 @@ shops:
       from_email: "pythairstyleco@gmail.com"
       invoice_submission_email: "pythairstyleco@gmail.com"
       management_recipients:
-        - "pythairstyleco@gmail.com"
+        - "codruta.maris@hotmail.com"
     
   opatra:
     name: "Opatra"
@@ -37,4 +37,4 @@ shops:
       from_email: "invoices.opulent@gmail.com"
       invoice_submission_email: "invoices.opulent@gmail.com"  # Where staff send their PDF invoices
       management_recipients:
-        - "invoices.opulent@gmail.com"
+        - "codruta.maris@hotmail.com"
