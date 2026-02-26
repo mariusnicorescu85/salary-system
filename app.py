@@ -177,6 +177,7 @@ def _load_results_from_airtable(shop_key: str) -> Optional[Dict]:
         return None
     _, api_key, _ = _get_airtable_credentials(shop_key)
     if not api_key:
+        logger.warning("_load_results_from_airtable: No Airtable API key (set in Streamlit secrets or sidebar)")
         return None
     try:
         client = AirtableClient(api_key=api_key)
@@ -185,10 +186,15 @@ def _load_results_from_airtable(shop_key: str) -> Optional[Dict]:
         logger.warning(f"Could not fetch from Airtable: {e}")
         return None
     if not records:
+        logger.warning(f"_load_results_from_airtable: No records in {table_name} (base {base_id})")
         return None
-    # Split into Daily and Monthly Summary
-    daily_rows = [r for r in records if (r.get("RecordType") or r.get("recordtype")) == "Daily"]
-    summary_rows = [r for r in records if (r.get("RecordType") or r.get("recordtype")) == "Monthly Summary"]
+
+    def _record_type(r):
+        return (r.get("RecordType") or r.get("recordtype") or r.get("Record Type") or "").strip()
+
+    # Split into Daily and Monthly Summary (Airtable may use "Record Type" with space)
+    daily_rows = [r for r in records if _record_type(r) == "Daily"]
+    summary_rows = [r for r in records if _record_type(r) == "Monthly Summary"]
     summary_by_emp = {}
     for rec in summary_rows:
         emp = (rec.get("Employee") or rec.get("employee") or "").strip()
@@ -2329,6 +2335,30 @@ def main():
         
         if not results:
             st.info("👆 Go to the **Calculate** tab and run a calculation for this shop first to see results here")
+            # Help diagnose when Airtable has data but Results tab is empty
+            with st.expander("🔍 Troubleshooting: I have data in Airtable but it's not showing"):
+                shop_config = config.get("shops", {}).get(selected_shop, {})
+                base_id = shop_config.get("airtable_base_id", "")
+                table_name = shop_config.get("airtable_table_name", "")
+                _, api_key, _ = _get_airtable_credentials(selected_shop)
+                st.write(f"**Shop:** {selected_shop} | **Base ID:** {base_id or '(not set)'} | **Table:** {table_name or '(not set)'}")
+                st.write(f"**Airtable API key:** {'✅ Found' if api_key else '❌ Missing (add to Streamlit Cloud Settings → Secrets)'}")
+                if api_key and base_id and table_name:
+                    try:
+                        client = AirtableClient(api_key=api_key)
+                        records = client.get_daily_breakdown_records(base_id, table_name)
+                        st.write(f"**Records in Airtable:** {len(records)}")
+                        if records:
+                            sample = records[0]
+                            rt = sample.get("RecordType") or sample.get("Record Type") or sample.get("recordtype")
+                            st.write(f"**Sample field names:** {list(sample.keys())[:10]}...")
+                            st.write(f"**RecordType in first record:** {repr(rt)}")
+                            if not rt:
+                                st.warning("Records lack a RecordType/Record Type field. Ensure your Airtable table has Daily and Monthly Summary rows with that field set.")
+                        else:
+                            st.warning("Table is empty. Run a calculation and click 'Confirm & Append to Airtable' to populate it.")
+                    except Exception as e:
+                        st.error(f"Airtable fetch error: {e}")
         else:
             if results_source == "file":
                 st.caption("📂 Showing last saved results (from previous run)")
