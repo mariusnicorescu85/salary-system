@@ -1253,6 +1253,9 @@ def main():
         # Saved reports selector - use previously saved report instead of re-uploading
         saved_reports = _list_saved_reports()
         if saved_reports:
+            if st.session_state.pop("_clear_saved_report", False):
+                st.session_state.selected_saved_report = None
+                st.session_state.pop("saved_report_selector", None)
             st.caption("Or use a saved report:")
             saved_options = ["(None - use upload above)"] + saved_reports
             selected_idx = 0
@@ -1270,8 +1273,7 @@ def main():
                 st.session_state.selected_saved_report = None
             if st.session_state.selected_saved_report:
                 if st.button("🗑️ Clear Selection", help="Clear saved report selection"):
-                    st.session_state.selected_saved_report = None
-                    st.session_state.saved_report_selector = "(None - use upload above)"  # reset selectbox widget
+                    st.session_state._clear_saved_report = True  # handled on next run, before widget
                     st.rerun()
         else:
             st.session_state.selected_saved_report = None
@@ -1280,6 +1282,11 @@ def main():
         gdrive_folder = _get_saved_reports_folder_id(selected_shop)
         gdrive_files = _list_gdrive_reports(gdrive_folder) if gdrive_folder else []
         if gdrive_files:
+            # Handle clear request from previous run (before widget is created - Streamlit
+            # disallows modifying widget state after the widget is instantiated)
+            if st.session_state.pop("_clear_gdrive", False):
+                st.session_state.selected_gdrive_report = None
+                st.session_state.pop("gdrive_report_selector", None)
             st.caption(f"Or load from Google Drive ({shop_config.get('name', selected_shop)} folder):")
             gdrive_options = ["(None)"] + [f["name"] for f in sorted(gdrive_files, key=lambda x: x.get("name", ""), reverse=True)]
             gdrive_selected_idx = 0
@@ -1295,8 +1302,7 @@ def main():
                 st.session_state.selected_gdrive_report = None
             if st.session_state.selected_gdrive_report:
                 if st.button("🗑️ Clear Drive Selection", key="clear_gdrive"):
-                    st.session_state.selected_gdrive_report = None
-                    st.session_state.gdrive_report_selector = "(None)"  # reset selectbox widget
+                    st.session_state._clear_gdrive = True  # handled on next run, before widget
                     st.rerun()
         else:
             st.session_state.selected_gdrive_report = None
