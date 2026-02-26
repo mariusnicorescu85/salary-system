@@ -133,23 +133,24 @@ class AirtableClient:
         
         # Check daily records (by Employee + Date)
         if daily_records:
-            # Get all existing daily records for the date range
             dates = [_normalize_date_for_key(r.get('Date') or r.get('date')) for r in daily_records]
             dates = [d for d in dates if d]
             if dates:
                 min_date = min(dates)
                 max_date = max(dates)
-                # Fetch ALL daily records in date range (no employee filter) - avoids formula
-                # length limits, escaping issues with names, and ensures we never miss records
-                formula = f'AND({{RecordType}} = "Daily", {{Date}} >= "{min_date}", {{Date}} <= "{max_date}")'
+                # Fetch ALL records (no formula) - most reliable; Airtable formulas can fail
+                # silently or return incomplete results. Filter Daily + date range in Python.
                 try:
-                    existing_daily = table.all(formula=formula)
+                    all_records = table.all()
                     existing_keys = set()
-                    for rec in existing_daily:
-                        emp = _get_employee_field(rec.get('fields', {}))
-                        date = rec['fields'].get('Date') or rec['fields'].get('date')
-                        date_str = _normalize_date_for_key(date)
-                        if emp and date_str:
+                    for rec in all_records:
+                        fields = rec.get('fields', {})
+                        if fields.get('RecordType') != 'Daily':
+                            continue
+                        emp = _get_employee_field(fields)
+                        date_val = fields.get('Date') or fields.get('date')
+                        date_str = _normalize_date_for_key(date_val)
+                        if emp and date_str and min_date <= date_str <= max_date:
                             existing_keys.add((emp, date_str))
                     
                     for record in daily_records:
@@ -239,15 +240,18 @@ class AirtableClient:
             if dates:
                 min_date = min(dates)
                 max_date = max(dates)
-                formula = f'AND({{RecordType}} = "Daily", {{Date}} >= "{min_date}", {{Date}} <= "{max_date}")'
                 try:
-                    existing_daily = table.all(formula=formula)
-                    for rec in existing_daily:
-                        emp = _get_employee_field(rec.get('fields', {}))
-                        date = rec['fields'].get('Date') or rec['fields'].get('date')
-                        date_str = _normalize_date_for_key(date)
-                        if emp and date_str:
-                            record_id_map[('Daily', emp, date_str)] = rec['id']
+                    all_records = table.all()
+                    for rec in all_records:
+                        fields = rec.get('fields', {})
+                        if fields.get('RecordType') != 'Daily':
+                            continue
+                        emp = _get_employee_field(fields)
+                        date_val = fields.get('Date') or fields.get('date')
+                        date_str = _normalize_date_for_key(date_val)
+                        if not (emp and date_str and min_date <= date_str <= max_date):
+                            continue
+                        record_id_map[('Daily', emp, date_str)] = rec['id']
                 except Exception as e:
                     pass
         
