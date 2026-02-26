@@ -3354,6 +3354,12 @@ Table Name: {repr(table_name)} (type: {type(table_name).__name__})
                                             "_sales_raw": day_sales_total,
                                             "_wages_raw": day_wages,
                                             "_wage_pct_raw": float("nan") if day_pct is None else round(day_pct, 2),
+                                            "_base_raw": base_pay,
+                                            "_commission_raw": commission,
+                                            "_hrly_rate_raw": daily_calc.get("HrlyRate", 0),
+                                            "_sales_only_raw": sales,
+                                            "_addl_raw": addl,
+                                            "_payment_type_raw": payment_type,
                                         })
 
                                 st.success(f"Imported {len(records)} records from report")
@@ -3410,6 +3416,47 @@ Table Name: {repr(table_name)} (type: {type(table_name).__name__})
                                                 index=dates_fmt,
                                             )
                                             st.bar_chart(amounts_df)
+
+                                # Save to Airtable (import path)
+                                if detail_rows and base_id_wvs and api_key_wvs:
+                                    st.markdown("---")
+                                    st.subheader("Save to Airtable")
+                                    shop_config_wvs = (load_config() or {}).get("shops", {}).get(shop_key_wvs, {})
+                                    table_name_wvs = shop_config_wvs.get("airtable_table_name", "")
+                                    if table_name_wvs and st.button("Save wage vs sales to Airtable", key="wvs_save_import_btn"):
+                                        airtable_records_wvs = []
+                                        for r in detail_rows:
+                                            airtable_records_wvs.append({
+                                                "RecordType": "Daily",
+                                                "Employee": r["Employee"],
+                                                "Date": r["Date"],
+                                                "Hours": r["Hours"],
+                                                "Sales": r.get("_sales_only_raw", 0),
+                                                "AddlSales": r.get("_addl_raw", 0),
+                                                "HrlyRate": r.get("_hrly_rate_raw", 0),
+                                                "Base": r.get("_base_raw", 0),
+                                                "Commission": r.get("_commission_raw", 0),
+                                                "PaymentType": r.get("_payment_type_raw", ""),
+                                            })
+                                        try:
+                                            with st.spinner("Saving to Airtable..."):
+                                                at_client_save = AirtableClient(api_key=api_key_wvs)
+                                                result = at_client_save.append_daily_breakdown(
+                                                    base_id_wvs, table_name_wvs, airtable_records_wvs,
+                                                    skip_duplicates=True,
+                                                )
+                                            st.success(f"Saved {result.get('records_created', 0)} records to Airtable.")
+                                            if result.get("skipped", 0) > 0:
+                                                st.info(f"Skipped {result['skipped']} existing records (duplicates).")
+                                            if result.get("message"):
+                                                st.caption(result["message"])
+                                        except Exception as e:
+                                            st.error(f"Failed to save: {e}")
+                                            with st.expander("Details"):
+                                                import traceback
+                                                st.code(traceback.format_exc())
+                                    elif not table_name_wvs:
+                                        st.caption("Configure airtable_table_name in config/shops.yaml to save.")
                     else:
                         st.info("Upload a report file above, or pick one from the sidebar (Saved Reports / Google Drive).")
 
@@ -3472,6 +3519,7 @@ Table Name: {repr(table_name)} (type: {type(table_name).__name__})
 
                     total_wages_wvs = 0.0
                     total_sales_wvs = 0.0
+                    manual_detail_rows = []
 
                     for d in wvs_dates:
                         date_str_wvs = d.strftime("%Y-%m-%d")
@@ -3524,10 +3572,24 @@ Table Name: {repr(table_name)} (type: {type(table_name).__name__})
                                                 break
                                     pt = (emp_cfg or {}).get("payment_type", "")
                                     if pt in ("tiered_commission", "hybrid_daily_max"):
-                                        total_wages_wvs += max(base_pay, commission)
+                                        day_wages = max(base_pay, commission)
                                     else:
-                                        total_wages_wvs += base_pay + commission
+                                        day_wages = base_pay + commission
+                                    total_wages_wvs += day_wages
                                     total_sales_wvs += sales
+                                    day_pct = (day_wages / sales * 100) if sales > 0 else None
+                                    manual_detail_rows.append({
+                                        "Employee": name,
+                                        "Date": date_str_wvs,
+                                        "Hours": hours,
+                                        "_sales_only_raw": sales,
+                                        "_addl_raw": 0.0,
+                                        "_base_raw": base_pay,
+                                        "_commission_raw": commission,
+                                        "_hrly_rate_raw": daily_calc.get("HrlyRate", 0),
+                                        "_payment_type_raw": pt,
+                                        "_wage_pct_raw": round(day_pct, 2) if day_pct is not None else None,
+                                    })
 
                     wage_pct = (total_wages_wvs / total_sales_wvs * 100) if total_sales_wvs > 0 else 0.0
                     target_pct = 25.0
@@ -3553,7 +3615,46 @@ Table Name: {repr(table_name)} (type: {type(table_name).__name__})
                     else:
                         st.info("Enter hours and sales above to see the wage % and target indicator.")
 
-                    st.caption("💡 Save to Airtable will be available in a future update.")
+                    # Save to Airtable (manual entry path)
+                    if manual_detail_rows and base_id_wvs and api_key_wvs:
+                        st.markdown("---")
+                        st.subheader("Save to Airtable")
+                        shop_config_wvs_manual = (load_config() or {}).get("shops", {}).get(shop_key_wvs, {})
+                        table_name_wvs_manual = shop_config_wvs_manual.get("airtable_table_name", "")
+                        if table_name_wvs_manual and st.button("Save wage vs sales to Airtable", key="wvs_save_manual_btn"):
+                            airtable_records_wvs_manual = []
+                            for r in manual_detail_rows:
+                                airtable_records_wvs_manual.append({
+                                    "RecordType": "Daily",
+                                    "Employee": r["Employee"],
+                                    "Date": r["Date"],
+                                    "Hours": r["Hours"],
+                                    "Sales": r.get("_sales_only_raw", 0),
+                                    "AddlSales": r.get("_addl_raw", 0),
+                                    "HrlyRate": r.get("_hrly_rate_raw", 0),
+                                    "Base": r.get("_base_raw", 0),
+                                    "Commission": r.get("_commission_raw", 0),
+                                    "PaymentType": r.get("_payment_type_raw", ""),
+                                })
+                            try:
+                                with st.spinner("Saving to Airtable..."):
+                                    at_client_save_manual = AirtableClient(api_key=api_key_wvs)
+                                    result = at_client_save_manual.append_daily_breakdown(
+                                        base_id_wvs, table_name_wvs_manual, airtable_records_wvs_manual,
+                                        skip_duplicates=True,
+                                    )
+                                st.success(f"Saved {result.get('records_created', 0)} records to Airtable.")
+                                if result.get("skipped", 0) > 0:
+                                    st.info(f"Skipped {result['skipped']} existing records (duplicates).")
+                                if result.get("message"):
+                                    st.caption(result["message"])
+                            except Exception as e:
+                                st.error(f"Failed to save: {e}")
+                                with st.expander("Details"):
+                                    import traceback
+                                    st.code(traceback.format_exc())
+                        elif not table_name_wvs_manual:
+                            st.caption("Configure airtable_table_name in config/shops.yaml to save.")
 
     with tab6:
         st.header("📋 Data Management")

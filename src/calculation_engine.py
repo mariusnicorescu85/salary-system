@@ -372,6 +372,8 @@ class CalculationEngine:
         # Initialize variables that may be used in summary
         monthly_max = 0.0
         method = None
+        alex_transport = 0.0
+        alex_rent = 0.0
         
         if payment_type == 'molly_commission':
             # Molly: Commission + manual hours + bonus - deductions - rent
@@ -451,6 +453,7 @@ class CalculationEngine:
         elif payment_type == 'alex_hybrid':
             # Alex: Transport + Commission + Base (rent) + bonus + manual hours - deductions
             transport = employee.get('transport', 0)
+            alex_transport = transport
             
             # Check if any days use new structure
             new_structure_date = datetime.strptime(employee.get('new_structure', {}).get('effective_date', '2025-11-04'), '%Y-%m-%d')
@@ -467,6 +470,7 @@ class CalculationEngine:
                     if adjusted_sales >= rent_tier.get('sales_threshold', 0):
                         rent_amount = rent_tier.get('rent_amount', 0)
                         break
+            alex_rent = rent_amount
             
             base_payment = transport + total_commission + rent_amount + total_bonus + manual_hours_pay
             final_payment = base_payment - deductions - advance
@@ -505,18 +509,22 @@ class CalculationEngine:
             summary_wage_breakdown.sort(key=lambda x: x['date_from'])
         
         # Individual bonus breakdown for detailed view
+        # For alex_hybrid, use employee transport (not Monthly Bonuses); otherwise use bonus_info
+        transport_for_breakdown = alex_transport if payment_type == 'alex_hybrid' else bonus_info.get('transportFuel', 0)
         bonus_breakdown = {
             'DailySalesBonus': bonus_info.get('dailySalesBonus', 0),
             'FirstLastHourBonus': bonus_info.get('firstLastHourBonus', 0),
             'SocialMediaBonus': bonus_info.get('socialMediaBonus', 0),
             'ManagementBonus': bonus_info.get('managementBonus', 0),
             'ManagementConsistencyBonus': bonus_info.get('managementConsistencyBonus', 0),
-            'TransportFuel': bonus_info.get('transportFuel', 0),
+            'TransportFuel': transport_for_breakdown,
             'PersonalSalesBonus': bonus_info.get('personalSalesBonus', 0),
             'ExtraBonus': bonus_info.get('extraBonus', 0),
             'DailyAllowance': bonus_info.get('dailyAllowance', 0)
         }
         
+        # For alex_hybrid, use rent from sales tiers; otherwise use bonus_info
+        rent_for_summary = alex_rent if payment_type == 'alex_hybrid' else rent
         summary = {
             'Employee': employee_name,
             'WorkedDays': worked_days,
@@ -532,7 +540,7 @@ class CalculationEngine:
             'ManualHours': manual_hours,
             'ManualHoursPay': round(manual_hours_pay, 2),
             'Deductions': deductions,
-            'Rent': rent,
+            'Rent': rent_for_summary,
             'Advance': advance,
             'FinalPayment': round(final_payment, 2),
             'PaymentType': payment_type,
