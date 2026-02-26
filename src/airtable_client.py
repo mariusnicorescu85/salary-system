@@ -540,6 +540,22 @@ class AirtableClient:
             # Append all records (original behavior)
             return self.append_records(base_id, table_name, breakdown_data)
 
+    def get_daily_breakdown_records(self, base_id: str, table_name: str) -> List[Dict]:
+        """
+        Fetch all records from a Daily Breakdowns table (Daily + Monthly Summary rows).
+        Returns list of records with fields as stored in Airtable.
+        """
+        table = self.api.table(base_id, table_name)
+        try:
+            rows = table.all()
+        except Exception:
+            return []
+        out = []
+        for rec in rows:
+            fields = rec.get("fields", {})
+            out.append(dict(fields))
+        return out
+
     # --- Persistence for Streamlit Cloud: shop targets, daily targets, monthly adjustments ---
 
     def get_shop_targets(self, base_id: str, table_name: str) -> Dict[str, Dict[str, Dict[str, Any]]]:

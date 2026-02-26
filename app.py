@@ -89,11 +89,175 @@ if 'selected_gdrive_report' not in st.session_state:
 
 # Saved reports directory for persisting uploaded files
 SAVED_REPORTS_DIR = Path("saved_reports")
+def _last_results_file(shop_key: str) -> Path:
+    """Path to last results file for a given shop."""
+    return SAVED_REPORTS_DIR / f"last_calculation_results_{shop_key}.json"
 
 
 def _ensure_saved_reports_dir():
     """Create saved_reports directory if it doesn't exist."""
     SAVED_REPORTS_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _save_last_results(results: Dict, results_shop_key: str, employees_config: Dict) -> None:
+    """Persist last calculation results per shop so Results tab can show them after app restart."""
+    try:
+        _ensure_saved_reports_dir()
+        def _serialize(obj):
+            if isinstance(obj, datetime):
+                return obj.isoformat()
+            if isinstance(obj, dict):
+                return {k: _serialize(v) for k, v in obj.items()}
+            if isinstance(obj, (list, tuple)):
+                return [_serialize(x) for x in obj]
+            return obj
+        data = {
+            "results": _serialize(results),
+            "results_shop_key": results_shop_key,
+            "employees_config": _serialize(employees_config),
+            "saved_at": datetime.now().isoformat(),
+        }
+        path = _last_results_file(results_shop_key)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+    except Exception as e:
+        logger.warning(f"Could not save last results: {e}")
+
+
+def _load_last_results_from_file(shop_key: str) -> Optional[Dict]:
+    """Load last calculation results from file for a given shop. Returns None if not found or invalid."""
+    try:
+        path = _last_results_file(shop_key)
+        if not path.exists():
+            return None
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        results = data.get("results", {})
+        if not results:
+            return None
+        return {
+            "results": results,
+            "results_shop_key": data.get("results_shop_key", ""),
+            "employees_config": data.get("employees_config", {}),
+        }
+    except Exception as e:
+        logger.warning(f"Could not load last results: {e}")
+        return None
+
+
+def _get_field(rec: Dict, *keys: str, default=0):
+    """Get field from Airtable record, trying multiple key names. Returns float for numeric fields."""
+    for k in keys:
+        v = rec.get(k)
+        if v is not None and v != "":
+            if isinstance(v, (int, float)):
+                return float(v)
+            if isinstance(v, str):
+                try:
+                    return float(v.replace(",", ""))
+                except (ValueError, TypeError):
+                    return v
+            return v
+    return default
+
+
+def _load_results_from_airtable(shop_key: str) -> Optional[Dict]:
+    """
+    Load calculation results from Airtable for a given shop.
+    Fetches from the shop's Daily Breakdowns table and converts to our results format.
+    Returns None if fetch fails or no data.
+    """
+    config = load_config()
+    shop_config = config.get("shops", {}).get(shop_key)
+    if not shop_config:
+        return None
+    base_id = shop_config.get("airtable_base_id")
+    table_name = shop_config.get("airtable_table_name")
+    if not base_id or not table_name:
+        return None
+    _, api_key, _ = _get_airtable_credentials(shop_key)
+    if not api_key:
+        return None
+    try:
+        client = AirtableClient(api_key=api_key)
+        records = client.get_daily_breakdown_records(base_id, table_name)
+    except Exception as e:
+        logger.warning(f"Could not fetch from Airtable: {e}")
+        return None
+    if not records:
+        return None
+    # Split into Daily and Monthly Summary
+    daily_rows = [r for r in records if (r.get("RecordType") or r.get("recordtype")) == "Daily"]
+    summary_rows = [r for r in records if (r.get("RecordType") or r.get("recordtype")) == "Monthly Summary"]
+    summary_by_emp = {}
+    for rec in summary_rows:
+        emp = (rec.get("Employee") or rec.get("employee") or "").strip()
+        if not emp:
+            continue
+        summary_by_emp[emp] = {
+            "WorkedDays": _get_field(rec, "WorkedDays", "Worked Days", "worked_days"),
+            "WorkedHours": _get_field(rec, "WorkedHours", "Worked Hours", "worked_hours"),
+            "Sales": _get_field(rec, "Sales", "sales"),
+            "AddlSales": _get_field(rec, "AddlSales", "Addl Sales", "addl_sales"),
+            "AdjustedSales": _get_field(rec, "AdjustedSales", "Adjusted Sales", "adjusted_sales"),
+            "AvgSalePerDay": _get_field(rec, "AvgSalePerDay", "Avg Sale Per Day"),
+            "RatePerHour": _get_field(rec, "RatePerHour", "Rate Per Hour", "rate_per_hour"),
+            "HoursSalary": _get_field(rec, "HoursSalary", "Hours Salary", "hours_salary"),
+            "TotalCommission": _get_field(rec, "TotalCommission", "Total Commission", "total_commission"),
+            "TotalBonus": _get_field(rec, "TotalBonus", "Total Bonus", "total_bonus"),
+            "FinalPayment": _get_field(rec, "FinalPayment", "Final Payment", "final_payment"),
+            "PaymentType": rec.get("PaymentType") or rec.get("payment_type") or "",
+            "ManualHours": _get_field(rec, "ManualHours", "Manual Hours"),
+            "ManualHoursPay": _get_field(rec, "ManualHoursPay", "Manual Hours Pay"),
+            "Deductions": _get_field(rec, "Deductions", "deductions"),
+            "Rent": _get_field(rec, "Rent", "rent"),
+            "Advance": _get_field(rec, "Advance", "advance"),
+            "BonusBreakdown": {},
+        }
+    # Build daily by employee
+    daily_by_emp = {}
+    for rec in daily_rows:
+        emp = (rec.get("Employee") or rec.get("employee") or "").strip()
+        if not emp:
+            continue
+        date_val = rec.get("Date") or rec.get("date")
+        if not date_val:
+            continue
+        date_str = date_val[:10] if isinstance(date_val, str) and len(date_val) >= 10 else str(date_val)[:10]
+        daily_by_emp.setdefault(emp, []).append({
+            "Employee": emp,
+            "Date": date_str,
+            "Hours": _get_field(rec, "Hours", "hours"),
+            "Sales": _get_field(rec, "Sales", "sales"),
+            "AddlSales": _get_field(rec, "AddlSales", "Addl Sales", "addl_sales"),
+            "HrlyRate": _get_field(rec, "HrlyRate", "Hrly Rate", "hrly_rate"),
+            "Base": _get_field(rec, "Base", "base"),
+            "Commission": _get_field(rec, "Commission", "commission"),
+            "PaymentType": rec.get("PaymentType") or rec.get("payment_type") or "",
+        })
+    for emp, daily_list in daily_by_emp.items():
+        daily_list.sort(key=lambda x: x.get("Date", ""))
+    # Build results: need both summary and daily for each employee
+    results = {}
+    for emp in set(summary_by_emp.keys()) | set(daily_by_emp.keys()):
+        summary = summary_by_emp.get(emp, {})
+        daily = daily_by_emp.get(emp, [])
+        if not summary and not daily:
+            continue
+        if not summary:
+            summary = {
+                "WorkedDays": 0, "WorkedHours": 0, "Sales": 0, "AddlSales": 0, "AdjustedSales": 0,
+                "FinalPayment": 0, "HoursSalary": 0, "TotalCommission": 0, "TotalBonus": 0,
+                "RatePerHour": 0, "PaymentType": "", "BonusBreakdown": {},
+            }
+        results[emp] = {"summary": summary, "daily": daily}
+    if not results:
+        return None
+    return {
+        "results": results,
+        "results_shop_key": shop_key,
+        "employees_config": {},
+    }
 
 
 def _list_saved_reports() -> List[str]:
@@ -1930,6 +2094,8 @@ def main():
                     # Store employee configuration and shop key for later use (e.g. email sending)
                     st.session_state.employees_config = employees
                     st.session_state.results_shop_key = selected_shop
+                    # Persist so Results tab can show them after app restart (e.g. on Streamlit Cloud)
+                    _save_last_results(results, selected_shop, employees)
                     st.session_state.calc_missing_employees = missing_employees
                     st.session_state.calc_zero_calc_employees = zero_calc_employees
                     
@@ -2134,11 +2300,40 @@ def main():
     
     with tab3:
         st.header("📊 Calculation Results")
+        selected_shop = st.session_state.get("selected_shop", list(config.get("shops", {}).keys())[0])
         
-        if not st.session_state.calculations_done:
-            st.info("👆 Go to the **Calculate** tab and run a calculation first to see results here")
-        else:
+        # Show results for the currently selected shop (like monthly target)
+        if (st.session_state.calculations_done and st.session_state.results and
+                st.session_state.get("results_shop_key") == selected_shop):
             results = st.session_state.results
+            results_source = "session"
+        else:
+            cached = _load_last_results_from_file(selected_shop)
+            if cached:
+                results = cached["results"]
+                st.session_state.results = results
+                st.session_state.results_shop_key = cached.get("results_shop_key", "")
+                st.session_state.employees_config = cached.get("employees_config", {})
+                results_source = "file"
+            else:
+                airtable_data = _load_results_from_airtable(selected_shop)
+                if airtable_data:
+                    results = airtable_data["results"]
+                    st.session_state.results = results
+                    st.session_state.results_shop_key = airtable_data.get("results_shop_key", selected_shop)
+                    st.session_state.employees_config = airtable_data.get("employees_config", {})
+                    results_source = "airtable"
+                else:
+                    results = {}
+                    results_source = None
+        
+        if not results:
+            st.info("👆 Go to the **Calculate** tab and run a calculation for this shop first to see results here")
+        else:
+            if results_source == "file":
+                st.caption("📂 Showing last saved results (from previous run)")
+            elif results_source == "airtable":
+                st.caption("📂 Loaded from Airtable (last exported data for this shop)")
             employees_config = st.session_state.get('employees_config', {})
             # Resolve the shop that these results belong to (not just the current sidebar selection)
             results_shop_key = st.session_state.get('results_shop_key')
