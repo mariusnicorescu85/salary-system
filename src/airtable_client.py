@@ -12,7 +12,8 @@ import re
 
 def _normalize_date_for_key(date_val: Any) -> Optional[str]:
     """Normalize date to YYYY-MM-DD for consistent duplicate matching.
-    Airtable may return ISO datetime (e.g. 2026-02-24T00:00:00.000Z) or date-only strings."""
+    Handles: ISO (2026-02-24), ISO datetime (2026-02-24T00:00:00.000Z),
+    and European formats (24/2/2026, 24/02/2026) from Airtable exports/API."""
     if not date_val:
         return None
     if isinstance(date_val, str):
@@ -22,6 +23,17 @@ def _normalize_date_for_key(date_val: Any) -> Optional[str]:
         if m:
             try:
                 y, mo, d = int(m.group(1)), int(m.group(2)), int(m.group(3))
+                if 2000 <= y <= 2100 and 1 <= mo <= 12 and 1 <= d <= 31:
+                    return f"{y:04d}-{mo:02d}-{d:02d}"
+            except (ValueError, IndexError):
+                pass
+        # European: D/M/YYYY, DD/M/YYYY, D/MM/YYYY, DD/MM/YYYY (Airtable export format)
+        m2 = re.match(r'^(\d{1,2})/(\d{1,2})/(\d{2,4})$', s)
+        if m2:
+            try:
+                d, mo, y = int(m2.group(1)), int(m2.group(2)), int(m2.group(3))
+                if y < 100:
+                    y += 2000 if y < 50 else 1900
                 if 2000 <= y <= 2100 and 1 <= mo <= 12 and 1 <= d <= 31:
                     return f"{y:04d}-{mo:02d}-{d:02d}"
             except (ValueError, IndexError):
