@@ -1271,6 +1271,7 @@ def main():
             if st.session_state.selected_saved_report:
                 if st.button("🗑️ Clear Selection", help="Clear saved report selection"):
                     st.session_state.selected_saved_report = None
+                    st.session_state.saved_report_selector = "(None - use upload above)"  # reset selectbox widget
                     st.rerun()
         else:
             st.session_state.selected_saved_report = None
@@ -1295,6 +1296,7 @@ def main():
             if st.session_state.selected_gdrive_report:
                 if st.button("🗑️ Clear Drive Selection", key="clear_gdrive"):
                     st.session_state.selected_gdrive_report = None
+                    st.session_state.gdrive_report_selector = "(None)"  # reset selectbox widget
                     st.rerun()
         else:
             st.session_state.selected_gdrive_report = None
