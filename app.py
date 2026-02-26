@@ -534,7 +534,7 @@ def _load_employee_config_from_airtable(
         emp = {
             "payment_type": rec.get("Payment Type") or "hourly_only",
             "hourly_rate": hourly_rate,
-            "email": rec.get("Email") or "",
+            "email": (rec.get("Email") or rec.get("email") or ""),
         }
         
         # Date of Birth - used for UK wage bracket when no hourly rate override
@@ -805,12 +805,26 @@ def _render_employees_tab(client, base_id, tables_cfg, shop_display, shop_option
         records = []
     editable_cols = ["Name", "Shop", "Date of Birth", "Email", "Payment Type", "Hourly Rate Override", "Commission Rate", "Daily Transport", "Rent", "Advance", "Employment Status"]
     num_cols = ("Hourly Rate Override", "Commission Rate", "Daily Transport", "Rent", "Advance")
+    # Build canonical -> actual Airtable field name mapping (Airtable is case-sensitive)
+    col_to_airtable = {}
+    if records:
+        all_keys = set()
+        for r in records:
+            all_keys.update(k for k in r.keys() if k != "id")
+        for col in editable_cols:
+            if col in all_keys:
+                col_to_airtable[col] = col
+            else:
+                low = col.lower()
+                match = next((k for k in all_keys if k.lower() == low), col)
+                col_to_airtable[col] = match
     if records:
         rows = []
         for r in records:
             row = {"_id": r.get("id", "")}
             for col in editable_cols:
-                val = r.get(col)
+                airtable_key = col_to_airtable.get(col, col)
+                val = r.get(airtable_key)
                 row[col] = "" if val is None else (", ".join(str(x) for x in val) if isinstance(val, list) else str(val).strip())
             rows.append(row)
         df = pd.DataFrame(rows)
@@ -830,30 +844,43 @@ def _render_employees_tab(client, base_id, tables_cfg, shop_display, shop_option
         }
         edited = st.data_editor(edit_df, column_config=col_config, use_container_width=True, num_rows="fixed", key="dm_emp_editor")
         if st.button("💾 Save changes", type="primary", key="dm_emp_save"):
+            name_to_id = {r.get("Name", ""): r.get("id", "") for r in records if r.get("Name")}
             changed, errors = 0, []
             for i in range(len(edited)):
-                if edit_df.iloc[i].to_dict() != edited.iloc[i].to_dict():
+                row = edited.iloc[i]
+                name = str(row.get("Name", "")).strip()
+                orig_matches = edit_df[edit_df["Name"].astype(str).str.strip() == name]
+                if orig_matches.empty:
+                    continue
+                orig_row = orig_matches.iloc[0]
+                if orig_row.to_dict() != row.to_dict():
+                    orig_name = str(orig_row.get("Name", "")).strip()
+                    record_id = name_to_id.get(orig_name)
+                    if not record_id:
+                        errors.append(f"{orig_name or '?'}: Could not find record ID")
+                        continue
                     fields = {}
-                    for k, v in edited.iloc[i].items():
+                    for k, v in row.items():
                         if k in editable_cols:
+                            airtable_key = col_to_airtable.get(k, k)
                             if v == "" or (isinstance(v, float) and pd.isna(v)):
-                                fields[k] = None
+                                fields[airtable_key] = None
                             elif k in num_cols:
-                                try: fields[k] = float(v)
-                                except (TypeError, ValueError): fields[k] = v
+                                try: fields[airtable_key] = float(v)
+                                except (TypeError, ValueError): fields[airtable_key] = v
                             else:
-                                fields[k] = str(v).strip()
+                                fields[airtable_key] = str(v).strip()
                     try:
-                        client.update_record(base_id, emp_table, id_col.iloc[i], fields)
+                        client.update_record(base_id, emp_table, record_id, fields)
                         changed += 1
                     except Exception as ex:
-                        errors.append(f"{edited.iloc[i].get('Name', '?')}: {ex}")
+                        errors.append(f"{orig_name or '?'}: {ex}")
+            for e in errors:
+                st.error(e)
             if changed:
                 st.success(f"✅ Updated {changed}.")
                 st.cache_data.clear()
                 st.rerun()
-            for e in errors:
-                st.error(e)
         with st.expander("➕ Add employee"):
             with st.form("dm_add_emp"):
                 n1, n2 = st.columns(2)
