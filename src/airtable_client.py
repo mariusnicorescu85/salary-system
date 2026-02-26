@@ -139,20 +139,9 @@ class AirtableClient:
             if dates:
                 min_date = min(dates)
                 max_date = max(dates)
-                employees = list(set((r.get('Employee') or r.get('employee') or '').strip() for r in daily_records))
-                employees = [e for e in employees if e]
-                
-                # Build filter formula
-                # Airtable OR syntax: OR({Field} = "value1", {Field} = "value2", ...)
-                # Escape double quotes in employee names to avoid formula errors
-                def _escape_formula_str(s: str) -> str:
-                    return (s or '').replace('\\', '\\\\').replace('"', '\\"')
-                employee_conditions = ', '.join([f'{{Employee}} = "{_escape_formula_str(emp)}"' for emp in employees])
-                if len(employees) > 1:
-                    formula = f'AND({{RecordType}} = "Daily", {{Date}} >= "{min_date}", {{Date}} <= "{max_date}", OR({employee_conditions}))'
-                else:
-                    formula = f'AND({{RecordType}} = "Daily", {{Date}} >= "{min_date}", {{Date}} <= "{max_date}", {{Employee}} = "{employees[0]}")'
-                
+                # Fetch ALL daily records in date range (no employee filter) - avoids formula
+                # length limits, escaping issues with names, and ensures we never miss records
+                formula = f'AND({{RecordType}} = "Daily", {{Date}} >= "{min_date}", {{Date}} <= "{max_date}")'
                 try:
                     existing_daily = table.all(formula=formula)
                     existing_keys = set()
@@ -250,17 +239,7 @@ class AirtableClient:
             if dates:
                 min_date = min(dates)
                 max_date = max(dates)
-                employees = list(set((r.get('Employee') or r.get('employee') or '').strip() for r in daily_records))
-                employees = [e for e in employees if e]
-                
-                def _escape_formula_str(s: str) -> str:
-                    return (s or '').replace('\\', '\\\\').replace('"', '\\"')
-                employee_conditions = ', '.join([f'{{Employee}} = "{_escape_formula_str(emp)}"' for emp in employees])
-                if len(employees) > 1:
-                    formula = f'AND({{RecordType}} = "Daily", {{Date}} >= "{min_date}", {{Date}} <= "{max_date}", OR({employee_conditions}))'
-                else:
-                    formula = f'AND({{RecordType}} = "Daily", {{Date}} >= "{min_date}", {{Date}} <= "{max_date}", {{Employee}} = "{_escape_formula_str(employees[0])}")'
-                
+                formula = f'AND({{RecordType}} = "Daily", {{Date}} >= "{min_date}", {{Date}} <= "{max_date}")'
                 try:
                     existing_daily = table.all(formula=formula)
                     for rec in existing_daily:
