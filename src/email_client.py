@@ -172,7 +172,9 @@ class EmailClient:
             html += f'<tr><td>Deductions</td><td class="currency">-{self.format_currency(summary.get("Deductions", 0))}</td></tr>'
         
         if summary.get('Rent', 0) > 0:
-            html += f'<tr><td>Rent</td><td class="currency">-{self.format_currency(summary.get("Rent", 0))}</td></tr>'
+            pt = (summary.get('PaymentType') or '').lower()
+            rent_fmt = self.format_currency(summary.get("Rent", 0))
+            html += f'<tr><td>Rent</td><td class="currency">{"" if pt == "alex_hybrid" else "-"}{rent_fmt}</td></tr>'
         
         if summary.get('Advance', 0) > 0:
             html += f'<tr><td>Advance</td><td class="currency">-{self.format_currency(summary.get("Advance", 0))}</td></tr>'
@@ -576,7 +578,9 @@ class EmailClient:
             if summary.get('Deductions', 0) > 0:
                 html += f'<tr><td>Deductions</td><td class="currency">-{self.format_currency(summary.get("Deductions", 0))}</td></tr>'
             if summary.get('Rent', 0) > 0:
-                html += f'<tr><td>Rent</td><td class="currency">-{self.format_currency(summary.get("Rent", 0))}</td></tr>'
+                pt = (summary.get('PaymentType') or '').lower()
+                rent_fmt = self.format_currency(summary.get("Rent", 0))
+                html += f'<tr><td>Rent</td><td class="currency">{"" if pt == "alex_hybrid" else "-"}{rent_fmt}</td></tr>'
             if summary.get('Advance', 0) > 0:
                 html += f'<tr><td>Advance</td><td class="currency">-{self.format_currency(summary.get("Advance", 0))}</td></tr>'
             html += f"""

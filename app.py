@@ -2441,6 +2441,11 @@ def main():
                 if summary.get('TotalCommission', 0) > 0:
                     breakdown_data.append(['Total Commission', format_currency(summary.get('TotalCommission', 0))])
                 
+                bonus_breakdown = summary.get('BonusBreakdown', {})
+                transport_val = bonus_breakdown.get('TransportFuel', 0) or 0
+                if transport_val > 0:
+                    breakdown_data.append(['Transport', format_currency(transport_val)])
+                
                 if summary.get('TotalBonus', 0) > 0:
                     breakdown_data.append(['Total Bonus', format_currency(summary.get('TotalBonus', 0))])
                 
@@ -2452,7 +2457,10 @@ def main():
                     breakdown_data.append(['Deductions', format_currency(-summary.get('Deductions', 0))])
                 
                 if summary.get('Rent', 0) > 0:
-                    breakdown_data.append(['Rent', format_currency(-summary.get('Rent', 0))])
+                    pt = (summary.get('PaymentType') or '').lower()
+                    # For alex_hybrid, rent is added to pay (chair rent); for others it's a deduction
+                    rent_display = format_currency(summary.get('Rent', 0)) if pt == 'alex_hybrid' else format_currency(-summary.get('Rent', 0))
+                    breakdown_data.append(['Rent', rent_display])
                 
                 if summary.get('Advance', 0) > 0:
                     breakdown_data.append(['Advance', format_currency(-summary.get('Advance', 0))])
