@@ -7,6 +7,35 @@ from pyairtable import Api
 from typing import List, Dict, Optional, Any
 import os
 import json
+import re
+
+
+def _normalize_date_for_key(date_val: Any) -> Optional[str]:
+    """Normalize date to YYYY-MM-DD for consistent duplicate matching.
+    Airtable may return ISO datetime (e.g. 2026-02-24T00:00:00.000Z) or date-only strings."""
+    if not date_val:
+        return None
+    if isinstance(date_val, str):
+        s = date_val.strip()
+        # ISO format: YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS... or YYYY-M-D
+        m = re.match(r'^(\d{4})-(\d{1,2})-(\d{1,2})', s)
+        if m:
+            try:
+                y, mo, d = int(m.group(1)), int(m.group(2)), int(m.group(3))
+                if 2000 <= y <= 2100 and 1 <= mo <= 12 and 1 <= d <= 31:
+                    return f"{y:04d}-{mo:02d}-{d:02d}"
+            except (ValueError, IndexError):
+                pass
+        return s[:10] if len(s) >= 10 else (s if s else None)
+    # datetime.date or datetime.datetime
+    if hasattr(date_val, 'strftime'):
+        return date_val.strftime('%Y-%m-%d')
+    return str(date_val)[:10] if date_val else None
+
+
+def _get_employee_field(fields: Dict) -> str:
+    """Get Employee value from Airtable record, handling field name casing."""
+    return (fields.get('Employee') or fields.get('employee') or '').strip()
 
 
 class AirtableClient:
@@ -93,15 +122,20 @@ class AirtableClient:
         # Check daily records (by Employee + Date)
         if daily_records:
             # Get all existing daily records for the date range
-            dates = [r.get('Date') for r in daily_records if r.get('Date')]
+            dates = [_normalize_date_for_key(r.get('Date') or r.get('date')) for r in daily_records]
+            dates = [d for d in dates if d]
             if dates:
                 min_date = min(dates)
                 max_date = max(dates)
-                employees = list(set(r.get('Employee') for r in daily_records))
+                employees = list(set((r.get('Employee') or r.get('employee') or '').strip() for r in daily_records))
+                employees = [e for e in employees if e]
                 
                 # Build filter formula
                 # Airtable OR syntax: OR({Field} = "value1", {Field} = "value2", ...)
-                employee_conditions = ', '.join([f'{{Employee}} = "{emp}"' for emp in employees])
+                # Escape double quotes in employee names to avoid formula errors
+                def _escape_formula_str(s: str) -> str:
+                    return (s or '').replace('\\', '\\\\').replace('"', '\\"')
+                employee_conditions = ', '.join([f'{{Employee}} = "{_escape_formula_str(emp)}"' for emp in employees])
                 if len(employees) > 1:
                     formula = f'AND({{RecordType}} = "Daily", {{Date}} >= "{min_date}", {{Date}} <= "{max_date}", OR({employee_conditions}))'
                 else:
@@ -111,20 +145,16 @@ class AirtableClient:
                     existing_daily = table.all(formula=formula)
                     existing_keys = set()
                     for rec in existing_daily:
-                        emp = rec['fields'].get('Employee', '')
-                        date = rec['fields'].get('Date', '')
-                        if date:
-                            # Airtable returns dates in various formats, normalize
-                            if isinstance(date, str):
-                                date_str = date[:10]  # Take YYYY-MM-DD part
-                            else:
-                                date_str = str(date)[:10]
+                        emp = _get_employee_field(rec.get('fields', {}))
+                        date = rec['fields'].get('Date') or rec['fields'].get('date')
+                        date_str = _normalize_date_for_key(date)
+                        if emp and date_str:
                             existing_keys.add((emp, date_str))
                     
                     for record in daily_records:
-                        emp = record.get('Employee', '')
-                        date = record.get('Date', '')
-                        if date and (emp, date) in existing_keys:
+                        emp = (record.get('Employee') or record.get('employee') or '').strip()
+                        date_str = _normalize_date_for_key(record.get('Date') or record.get('date'))
+                        if emp and date_str and (emp, date_str) in existing_keys:
                             existing_records.append(record)
                         else:
                             new_records.append(record)
@@ -203,28 +233,29 @@ class AirtableClient:
         
         # Find daily record IDs
         if daily_records:
-            dates = [r.get('Date') for r in daily_records if r.get('Date')]
+            dates = [_normalize_date_for_key(r.get('Date') or r.get('date')) for r in daily_records]
+            dates = [d for d in dates if d]
             if dates:
                 min_date = min(dates)
                 max_date = max(dates)
-                employees = list(set(r.get('Employee') for r in daily_records))
+                employees = list(set((r.get('Employee') or r.get('employee') or '').strip() for r in daily_records))
+                employees = [e for e in employees if e]
                 
-                employee_conditions = ', '.join([f'{{Employee}} = "{emp}"' for emp in employees])
+                def _escape_formula_str(s: str) -> str:
+                    return (s or '').replace('\\', '\\\\').replace('"', '\\"')
+                employee_conditions = ', '.join([f'{{Employee}} = "{_escape_formula_str(emp)}"' for emp in employees])
                 if len(employees) > 1:
                     formula = f'AND({{RecordType}} = "Daily", {{Date}} >= "{min_date}", {{Date}} <= "{max_date}", OR({employee_conditions}))'
                 else:
-                    formula = f'AND({{RecordType}} = "Daily", {{Date}} >= "{min_date}", {{Date}} <= "{max_date}", {{Employee}} = "{employees[0]}")'
+                    formula = f'AND({{RecordType}} = "Daily", {{Date}} >= "{min_date}", {{Date}} <= "{max_date}", {{Employee}} = "{_escape_formula_str(employees[0])}")'
                 
                 try:
                     existing_daily = table.all(formula=formula)
                     for rec in existing_daily:
-                        emp = rec['fields'].get('Employee', '')
-                        date = rec['fields'].get('Date', '')
-                        if date:
-                            if isinstance(date, str):
-                                date_str = date[:10]
-                            else:
-                                date_str = str(date)[:10]
+                        emp = _get_employee_field(rec.get('fields', {}))
+                        date = rec['fields'].get('Date') or rec['fields'].get('date')
+                        date_str = _normalize_date_for_key(date)
+                        if emp and date_str:
                             record_id_map[('Daily', emp, date_str)] = rec['id']
                 except Exception as e:
                     pass
@@ -279,13 +310,13 @@ class AirtableClient:
         update_batch = []
         for record in records:
             record_type = record.get('RecordType', '')
-            emp = record.get('Employee', '')
+            emp = (record.get('Employee') or record.get('employee') or '').strip()
             
-            # Get the key for this record
+            # Get the key for this record (use normalized date to match find_record_ids)
             if record_type == 'Daily':
-                date = record.get('Date', '')
-                if date:
-                    key = ('Daily', emp, date)
+                date_str = _normalize_date_for_key(record.get('Date') or record.get('date'))
+                if date_str:
+                    key = ('Daily', emp, date_str)
                     record_id = record_id_map.get(key)
                     if record_id:
                         # Prepare update record
@@ -370,15 +401,15 @@ class AirtableClient:
         # Separate into records to update and records to create
         records_to_update = []
         records_to_create = []
-        
+
         for record in breakdown_data:
             record_type = record.get('RecordType', '')
-            emp = record.get('Employee', '')
+            emp = (record.get('Employee') or record.get('employee') or '').strip()
             
             if record_type == 'Daily':
-                date = record.get('Date', '')
-                if date:
-                    key = ('Daily', emp, date)
+                date_str = _normalize_date_for_key(record.get('Date') or record.get('date'))
+                if date_str:
+                    key = ('Daily', emp, date_str)
                     if key in record_id_map:
                         records_to_update.append(record)
                     else:
@@ -429,19 +460,19 @@ class AirtableClient:
         # Only update records that exist
         records_to_update = []
         records_not_found = []
-        
+
         for record in breakdown_data:
             record_type = record.get('RecordType', '')
-            emp = record.get('Employee', '')
+            emp = (record.get('Employee') or record.get('employee') or '').strip()
             
             if record_type == 'Daily':
-                date = record.get('Date', '')
-                if date:
-                    key = ('Daily', emp, date)
+                date_str = _normalize_date_for_key(record.get('Date') or record.get('date'))
+                if date_str:
+                    key = ('Daily', emp, date_str)
                     if key in record_id_map:
                         records_to_update.append(record)
                     else:
-                        records_not_found.append(f"{emp} - {date}")
+                        records_not_found.append(f"{emp} - {date_str}")
             elif record_type == 'Monthly Summary':
                 month = record.get('Month', '')
                 if month:
