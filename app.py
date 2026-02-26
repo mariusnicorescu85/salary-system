@@ -1392,10 +1392,12 @@ def main():
             st.error("⚠️ Failed to load from Airtable. Check Base ID, API key, and that Employees table has records for this shop.")
             st.stop()
         
-        # Month/Year selector
+        # Month/Year selector (default to current year and month)
         col1, col2 = st.columns(2)
         with col1:
-            selected_year = st.selectbox("Year", range(2024, 2027), index=1 if datetime.now().year == 2025 else 0, key="bonus_year")
+            years = list(range(datetime.now().year - 2, datetime.now().year + 3))
+            default_year_index = years.index(datetime.now().year)
+            selected_year = st.selectbox("Year", years, index=default_year_index, key="bonus_year")
         with col2:
             selected_month = st.selectbox("Month", range(1, 13), index=datetime.now().month - 1, key="bonus_month")
         
