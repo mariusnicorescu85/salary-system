@@ -69,9 +69,9 @@ if 'name' not in st.session_state:
 if 'username' not in st.session_state:
     st.session_state.username = None
 if 'target_approved' not in st.session_state:
-    st.session_state.target_approved = 0.0
+    st.session_state.target_approved = "0"
 if 'target_total_reached' not in st.session_state:
-    st.session_state.target_total_reached = 0.0
+    st.session_state.target_total_reached = "0"
 if 'target_current_date' not in st.session_state:
     st.session_state.target_current_date = datetime.today().date()
 if 'daily_target_date' not in st.session_state:
@@ -434,6 +434,16 @@ def _load_employee_config_from_airtable(
 def format_currency(value: float) -> str:
     """Format value as currency"""
     return f"£{value:,.2f}"
+
+
+def _parse_currency_input(raw) -> float:
+    """Parse user input that may be a number or string like '5,000.00' or '5000'."""
+    if raw is None:
+        return 0.0
+    if isinstance(raw, (int, float)):
+        return float(raw)
+    s = str(raw).strip().replace(",", "").replace(" ", "")
+    return float(s) if s else 0.0
 
 
 def load_monthly_bonuses(shop_key: str, year: int, month: int, shop_filter_override: Optional[str] = None) -> Dict:
@@ -2807,24 +2817,16 @@ Table Name: {repr(table_name)} (type: {type(table_name).__name__})
             stored_total_reached_pre = (
                 targets_config_pre.get(shop_key, {}).get(month_key_pre, {}).get("total_reached")
             )
-            # When shop or month changes, reload from storage so we don't show another shop's values
+            # When shop or month changes, reload from storage so we don't show another shop's values.
+            # Do NOT overwrite when same shop/month: the form may have just been submitted with new
+            # values that aren't in session state yet (form widgets write after this block runs).
             last_loaded_shop_month = st.session_state.get("_target_shop_month")
             if last_loaded_shop_month != current_shop_month:
-                st.session_state.target_approved = float(stored_target_pre or 0)
-                st.session_state.target_total_reached = float(stored_total_reached_pre or 0)
+                v_approved = float(stored_target_pre or 0)
+                v_reached = float(stored_total_reached_pre or 0)
+                st.session_state.target_approved = f"{v_approved:,.2f}" if v_approved else "0"
+                st.session_state.target_total_reached = f"{v_reached:,.2f}" if v_reached else "0"
                 st.session_state["_target_shop_month"] = current_shop_month
-            else:
-                # Same shop/month - only pre-fill if empty
-                if (
-                    float(st.session_state.get("target_approved", 0.0)) == 0.0
-                    and stored_target_pre
-                ):
-                    st.session_state.target_approved = float(stored_target_pre)
-                if (
-                    float(st.session_state.get("target_total_reached", 0.0)) == 0.0
-                    and stored_total_reached_pre
-                ):
-                    st.session_state.target_total_reached = float(stored_total_reached_pre)
 
             with st.container(border=True):
                 st.subheader("🏪 Shop target (monthly)")
@@ -2833,19 +2835,15 @@ Table Name: {repr(table_name)} (type: {type(table_name).__name__})
                 with st.form("sales_target_tracker_form", clear_on_submit=False):
                     col1, col2 = st.columns(2)
                     with col1:
-                        st.number_input(
+                        st.text_input(
                             "Approved target (£)",
-                            min_value=0.0,
-                            step=500.0,
-                            format="%.2f",
                             key="target_approved",
+                            placeholder="e.g. 5000 or 5,000.00",
                         )
-                        st.number_input(
+                        st.text_input(
                             "Total reached so far (£)",
-                            min_value=0.0,
-                            step=500.0,
-                            format="%.2f",
                             key="target_total_reached",
+                            placeholder="e.g. 5000 or 5,000.00",
                         )
                     with col2:
                         st.date_input(
@@ -2856,9 +2854,9 @@ Table Name: {repr(table_name)} (type: {type(table_name).__name__})
 
                     sales_target_form_submitted = st.form_submit_button("Update calculations")
 
-                # Read current values from session state for calculations
-                approved_target = float(st.session_state.get("target_approved", 0.0))
-                total_reached = float(st.session_state.get("target_total_reached", 0.0))
+                # Read current values from session state for calculations (parse strings like "5,000.00")
+                approved_target = _parse_currency_input(st.session_state.get("target_approved", "0"))
+                total_reached = _parse_currency_input(st.session_state.get("target_total_reached", "0"))
                 current_date = st.session_state.get("target_current_date", datetime.today().date())
 
                 # Load or update saved targets for this shop/month
