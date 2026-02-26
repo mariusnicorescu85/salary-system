@@ -2968,138 +2968,359 @@ Table Name: {repr(table_name)} (type: {type(table_name).__name__})
             )
 
             shop_key_wvs = st.session_state.get("selected_shop", list(load_config().get("shops", {}).keys())[0])
-            employees_wvs, bonuses_wvs, _ = load_employee_config(shop_key_wvs) or ({}, {}, {})
+            emp_config_result = load_employee_config(shop_key_wvs)
+            employees_wvs, bonuses_wvs, emp_config_full = emp_config_result or ({}, {}, {})
+            if emp_config_full is None:
+                emp_config_full = {}
             employee_names_wvs = list(employees_wvs.keys()) if employees_wvs else []
 
             if not employees_wvs:
                 st.warning("No employees loaded for this shop. Check Airtable configuration.")
             else:
-                wvs_mode = st.radio(
-                    "Period",
-                    options=["Single day", "Date range"],
-                    key="wvs_mode",
+                wvs_data_source = st.radio(
+                    "Data source",
+                    options=["Import from report", "Manual entry"],
+                    key="wvs_data_source",
                     horizontal=True,
-                    help="Choose a single day or a date range (interval) to enter data for.",
+                    help="Import from a report file (e.g. report_pyt.csv) or enter hours and sales manually.",
                 )
 
-                if wvs_mode == "Single day":
-                    wvs_start = st.date_input(
-                        "Date",
-                        value=st.session_state.get("wage_vs_sales_date", datetime.today().date()),
-                        key="wage_vs_sales_date",
-                        help="The day you are entering data for.",
+                if wvs_data_source == "Import from report":
+                    # --- Import from report path ---
+                    wvs_uploaded = st.file_uploader(
+                        "Upload report (CSV)",
+                        type=["csv"],
+                        key="wvs_report_upload",
+                        help="Upload a report file with Employee sections, Date, Hours, Sales columns (e.g. report_pyt.csv).",
                     )
-                    wvs_dates = [wvs_start]
-                else:
-                    col_start, col_end = st.columns(2)
-                    with col_start:
-                        wvs_start = st.date_input(
-                            "Start date",
-                            value=st.session_state.get("wvs_range_start", datetime.today().date()),
-                            key="wvs_range_start",
-                        )
-                    with col_end:
-                        wvs_end = st.date_input(
-                            "End date",
-                            value=st.session_state.get("wvs_range_end", datetime.today().date()),
-                            key="wvs_range_end",
-                        )
-                    if wvs_end < wvs_start:
-                        st.warning("End date must be on or after start date.")
-                        wvs_dates = []
+                    st.caption("💡 Or pick a report from the **sidebar** (Saved Reports or Google Drive).")
+                    # Use: tab upload first, then sidebar selection (saved or Google Drive)
+                    wvs_report_file = wvs_uploaded
+                    if not wvs_report_file and report_file is not None:
+                        fname = getattr(report_file, "name", "") or ""
+                        if fname.lower().endswith(".csv"):
+                            wvs_report_file = report_file
+                            if hasattr(report_file, "seek"):
+                                report_file.seek(0)
+                        else:
+                            st.info("Sidebar report is not CSV. Upload a CSV above or select a CSV from the sidebar.")
+                    if wvs_report_file:
+                        if wvs_report_file is not wvs_uploaded:
+                            st.caption(f"📂 Using: **{getattr(wvs_report_file, 'name', 'report')}** (from sidebar)")
+                        try:
+                            if hasattr(wvs_report_file, "seek"):
+                                wvs_report_file.seek(0)
+                            raw = wvs_report_file.read()
+                            if isinstance(raw, bytes):
+                                try:
+                                    content = raw.decode("utf-8")
+                                except UnicodeDecodeError:
+                                    content = raw.decode("latin-1")
+                            else:
+                                content = str(raw)
+                            lines = content.split("\n")
+                            all_rows = []
+                            max_cols = 0
+                            for line in lines:
+                                if not line.strip():
+                                    continue
+                                row = []
+                                current_field = ""
+                                in_quotes = False
+                                for char in line:
+                                    if char == '"':
+                                        in_quotes = not in_quotes
+                                    elif char == "," and not in_quotes:
+                                        row.append(current_field.strip())
+                                        current_field = ""
+                                    else:
+                                        current_field += char
+                                if current_field or row:
+                                    row.append(current_field.strip())
+                                if row:
+                                    all_rows.append(row)
+                                    max_cols = max(max_cols, len(row))
+                            for row in all_rows:
+                                while len(row) < max_cols:
+                                    row.append("")
+                            df = pd.DataFrame(all_rows, columns=range(max_cols))
+                        except Exception as e:
+                            st.error(f"Could not read file: {e}")
+                        else:
+                            name_mapping = emp_config_full.get("name_mapping", {}) or {}
+                            exclude_patterns = emp_config_full.get("exclude_patterns", []) or []
+                            processor = DataProcessor(name_mapping=name_mapping, exclude_patterns=exclude_patterns)
+                            records = processor.parse_csv(df)
+                            if not records:
+                                st.warning("No valid records found. Check file format and name mappings.")
+                            else:
+                                # Aggregate by (Employee, Date): sum Hours, sum Sales, sum AddlSales
+                                from collections import defaultdict
+                                agg = defaultdict(lambda: {"hours": 0.0, "sales": 0.0, "addl_sales": 0.0})
+                                for r in records:
+                                    emp = r.get("Employee", "").strip()
+                                    date = r.get("Date")
+                                    if not emp or not date:
+                                        continue
+                                    key = (emp, date)
+                                    agg[key]["hours"] += float(r.get("Hours", 0) or 0)
+                                    agg[key]["sales"] += float(r.get("Sales", 0) or 0)
+                                    agg[key]["addl_sales"] += float(r.get("AddlSales", 0) or 0)
+
+                                # Load wage brackets and engine
+                                wage_brackets_wvs = []
+                                base_id_wvs, api_key_wvs, _ = _get_airtable_credentials(shop_key_wvs)
+                                if base_id_wvs and api_key_wvs:
+                                    tables_cfg_wvs = (load_config() or {}).get("airtable_config_tables", {})
+                                    bracket_table = tables_cfg_wvs.get("uk_wage_bracket", "UK Wage Bracket")
+                                    try:
+                                        at_client_wvs = AirtableClient(api_key=api_key_wvs)
+                                        wage_brackets_wvs = at_client_wvs.get_wage_brackets(base_id_wvs, bracket_table)
+                                    except Exception:
+                                        pass
+                                engine_wvs = CalculationEngine(employees_wvs, bonuses_wvs or {}, wage_brackets=wage_brackets_wvs)
+
+                                total_wages_wvs = 0.0
+                                total_sales_wvs = 0.0
+                                detail_rows = []
+                                for (emp_name, date_str), data in agg.items():
+                                    hours = data["hours"]
+                                    sales = data["sales"]
+                                    addl = data["addl_sales"]
+                                    day_sales_total = sales + addl
+                                    if hours > 0 or sales > 0 or addl > 0:
+                                        daily_calc = engine_wvs.calculate_daily_payment(emp_name, hours, sales, addl, date_str)
+                                        base_pay = daily_calc.get("Base", 0)
+                                        commission = daily_calc.get("Commission", 0)
+                                        emp_config = employees_wvs.get(emp_name)
+                                        if not emp_config:
+                                            emp_name_lower = emp_name.lower()
+                                            for k, v in employees_wvs.items():
+                                                if k.lower() == emp_name_lower:
+                                                    emp_config = v
+                                                    break
+                                        payment_type = (emp_config or {}).get("payment_type", "")
+                                        if payment_type in ("tiered_commission", "hybrid_daily_max"):
+                                            day_wages = max(base_pay, commission)
+                                        else:
+                                            day_wages = base_pay + commission
+                                        total_wages_wvs += day_wages
+                                        total_sales_wvs += day_sales_total
+                                        day_pct = (day_wages / day_sales_total * 100) if day_sales_total > 0 else None
+                                        detail_rows.append({
+                                            "Employee": emp_name,
+                                            "Date": date_str,
+                                            "Hours": hours,
+                                            "Sales": format_currency(sales),
+                                            "Add'l Sales": format_currency(addl),
+                                            "Total Sales": format_currency(day_sales_total),
+                                            "Base": format_currency(base_pay),
+                                            "Commission": format_currency(commission),
+                                            "Total Wages": format_currency(day_wages),
+                                            "Wage %": "N/A" if day_pct is None else f"{day_pct:.2f}%",
+                                            "_sales_raw": day_sales_total,
+                                            "_wages_raw": day_wages,
+                                            "_wage_pct_raw": float("nan") if day_pct is None else round(day_pct, 2),
+                                        })
+
+                                st.success(f"Imported {len(records)} records from report")
+                                wage_pct = (total_wages_wvs / total_sales_wvs * 100) if total_sales_wvs > 0 else 0.0
+                                target_pct = 25.0
+                                st.markdown("---")
+                                st.markdown("### Result")
+                                col_a, col_b, col_c = st.columns(3)
+                                with col_a:
+                                    st.metric("Total wages (from report)", format_currency(total_wages_wvs))
+                                with col_b:
+                                    st.metric("Total sales", format_currency(total_sales_wvs))
+                                with col_c:
+                                    st.metric("Wage % of sales", f"{wage_pct:.2f}%")
+                                if total_sales_wvs > 0:
+                                    if wage_pct < target_pct - 1:
+                                        st.success("🟢 **Under target** – wages are below 25% of sales.")
+                                    elif wage_pct <= target_pct + 1:
+                                        st.info("🟡 **On target** – wages are around 25% of sales.")
+                                    else:
+                                        st.error("🔴 **Over target** – wages are above 25% of sales.")
+
+                                if detail_rows:
+                                    by_employee = defaultdict(list)
+                                    for r in detail_rows:
+                                        by_employee[r["Employee"]].append(r)
+                                    for emp_name in sorted(by_employee.keys()):
+                                        emp_rows = by_employee[emp_name]
+                                        emp_rows.sort(key=lambda x: x["Date"])
+                                        days_count = len(emp_rows)
+                                        emp_total_sales = sum(r["_sales_raw"] for r in emp_rows)
+                                        emp_total_wages = sum(r["_wages_raw"] for r in emp_rows)
+                                        emp_avg_pct_str = "N/A" if emp_total_sales <= 0 else f"{(emp_total_wages / emp_total_sales * 100):.2f}%"
+                                        with st.expander(f"**{emp_name}** — {days_count} days worked · Avg wage %: {emp_avg_pct_str}", expanded=True):
+                                            table_rows = [{k: v for k, v in r.items() if not k.startswith("_")} for r in emp_rows]
+                                            st.dataframe(
+                                                pd.DataFrame(table_rows),
+                                                use_container_width=True,
+                                                hide_index=True,
+                                            )
+                                            dates_fmt = [pd.to_datetime(r["Date"]).strftime("%d %b") for r in emp_rows]
+                                            st.caption("Wage % over time (target: 25%)")
+                                            pct_df = pd.DataFrame(
+                                                {"Wage %": [r["_wage_pct_raw"] for r in emp_rows]},
+                                                index=dates_fmt,
+                                            )
+                                            st.line_chart(pct_df)
+                                            st.caption("Wages vs Sales per day (£)")
+                                            amounts_df = pd.DataFrame(
+                                                {
+                                                    "Wages (£)": [r["_wages_raw"] for r in emp_rows],
+                                                    "Sales (£)": [r["_sales_raw"] for r in emp_rows],
+                                                },
+                                                index=dates_fmt,
+                                            )
+                                            st.bar_chart(amounts_df)
                     else:
-                        num_days = (wvs_end - wvs_start).days + 1
-                        if num_days > 31:
-                            st.warning("Maximum 31 days per range. Please shorten the interval.")
+                        st.info("Upload a report file above, or pick one from the sidebar (Saved Reports / Google Drive).")
+
+                else:
+                    # --- Manual entry path ---
+                    wvs_mode = st.radio(
+                        "Period",
+                        options=["Single day", "Date range"],
+                        key="wvs_mode",
+                        horizontal=True,
+                        help="Choose a single day or a date range (interval) to enter data for.",
+                    )
+
+                    wvs_dates = []
+                    if wvs_mode == "Single day":
+                        wvs_start = st.date_input(
+                            "Date",
+                            value=st.session_state.get("wage_vs_sales_date", datetime.today().date()),
+                            key="wage_vs_sales_date",
+                            help="The day you are entering data for.",
+                        )
+                        wvs_dates = [wvs_start]
+                    else:
+                        col_start, col_end = st.columns(2)
+                        with col_start:
+                            wvs_start = st.date_input(
+                                "Start date",
+                                value=st.session_state.get("wvs_range_start", datetime.today().date()),
+                                key="wvs_range_start",
+                            )
+                        with col_end:
+                            wvs_end = st.date_input(
+                                "End date",
+                                value=st.session_state.get("wvs_range_end", datetime.today().date()),
+                                key="wvs_range_end",
+                            )
+                        if wvs_end < wvs_start:
+                            st.warning("End date must be on or after start date.")
                             wvs_dates = []
                         else:
-                            wvs_dates = [wvs_start + timedelta(days=i) for i in range(num_days)]
+                            num_days = (wvs_end - wvs_start).days + 1
+                            if num_days > 31:
+                                st.warning("Maximum 31 days per range. Please shorten the interval.")
+                                wvs_dates = []
+                            else:
+                                wvs_dates = [wvs_start + timedelta(days=i) for i in range(num_days)]
 
-                # Load wage brackets and engine once
-                wage_brackets_wvs = []
-                base_id_wvs, api_key_wvs, _ = _get_airtable_credentials(shop_key_wvs)
-                if base_id_wvs and api_key_wvs:
-                    tables_cfg_wvs = (load_config() or {}).get("airtable_config_tables", {})
-                    bracket_table = tables_cfg_wvs.get("uk_wage_bracket", "UK Wage Bracket")
-                    try:
-                        at_client_wvs = AirtableClient(api_key=api_key_wvs)
-                        wage_brackets_wvs = at_client_wvs.get_wage_brackets(base_id_wvs, bracket_table)
-                    except Exception:
-                        pass
-                engine_wvs = CalculationEngine(employees_wvs, bonuses_wvs or {}, wage_brackets=wage_brackets_wvs)
+                    # Load wage brackets and engine once (manual entry only)
+                    wage_brackets_wvs = []
+                    base_id_wvs, api_key_wvs, _ = _get_airtable_credentials(shop_key_wvs)
+                    if base_id_wvs and api_key_wvs:
+                        tables_cfg_wvs = (load_config() or {}).get("airtable_config_tables", {})
+                        bracket_table = tables_cfg_wvs.get("uk_wage_bracket", "UK Wage Bracket")
+                        try:
+                            at_client_wvs = AirtableClient(api_key=api_key_wvs)
+                            wage_brackets_wvs = at_client_wvs.get_wage_brackets(base_id_wvs, bracket_table)
+                        except Exception:
+                            pass
+                    engine_wvs = CalculationEngine(employees_wvs, bonuses_wvs or {}, wage_brackets=wage_brackets_wvs)
 
-                total_wages_wvs = 0.0
-                total_sales_wvs = 0.0
+                    total_wages_wvs = 0.0
+                    total_sales_wvs = 0.0
 
-                for d in wvs_dates:
-                    date_str_wvs = d.strftime("%Y-%m-%d")
-                    day_label = d.strftime("%a %d %b") if wvs_mode == "Date range" else "Hours & sales per staff"
-                    with st.expander(f"**{day_label}** ({date_str_wvs})", expanded=(wvs_mode == "Single day" or len(wvs_dates) <= 7)):
-                        staff_working_wvs = st.multiselect(
-                            "Staff working",
-                            options=employee_names_wvs,
-                            default=[],
-                            key=f"wvs_staff_{date_str_wvs}",
-                            help="Select everyone who worked on this date.",
-                        )
-                        wvs_data = {}
-                        for name in staff_working_wvs:
-                            c1, c2 = st.columns(2)
-                            with c1:
-                                hours_val = st.number_input(
-                                    f"Hours – {name}",
-                                    min_value=0.0,
-                                    step=0.5,
-                                    value=0.0,
-                                    format="%.1f",
-                                    key=f"wvs_hours_{date_str_wvs}_{name}",
-                                )
-                            with c2:
-                                sales_val = st.number_input(
-                                    f"Sales (£) – {name}",
-                                    min_value=0.0,
-                                    step=50.0,
-                                    value=0.0,
-                                    format="%.2f",
-                                    key=f"wvs_sales_{date_str_wvs}_{name}",
-                                )
-                            wvs_data[name] = {"hours": hours_val, "sales": sales_val}
+                    for d in wvs_dates:
+                        date_str_wvs = d.strftime("%Y-%m-%d")
+                        day_label = d.strftime("%a %d %b") if wvs_mode == "Date range" else "Hours & sales per staff"
+                        with st.expander(f"**{day_label}** ({date_str_wvs})", expanded=(wvs_mode == "Single day" or len(wvs_dates) <= 7)):
+                            staff_working_wvs = st.multiselect(
+                                "Staff working",
+                                options=employee_names_wvs,
+                                default=[],
+                                key=f"wvs_staff_{date_str_wvs}",
+                                help="Select everyone who worked on this date.",
+                            )
+                            wvs_data = {}
+                            for name in staff_working_wvs:
+                                c1, c2 = st.columns(2)
+                                with c1:
+                                    hours_val = st.number_input(
+                                        f"Hours – {name}",
+                                        min_value=0.0,
+                                        step=0.5,
+                                        value=0.0,
+                                        format="%.1f",
+                                        key=f"wvs_hours_{date_str_wvs}_{name}",
+                                    )
+                                with c2:
+                                    sales_val = st.number_input(
+                                        f"Sales (£) – {name}",
+                                        min_value=0.0,
+                                        step=50.0,
+                                        value=0.0,
+                                        format="%.2f",
+                                        key=f"wvs_sales_{date_str_wvs}_{name}",
+                                    )
+                                wvs_data[name] = {"hours": hours_val, "sales": sales_val}
 
-                        for name, data in wvs_data.items():
-                            hours = data["hours"]
-                            sales = data["sales"]
-                            if hours > 0 or sales > 0:
-                                daily_calc = engine_wvs.calculate_daily_payment(
-                                    name, hours, sales, 0.0, date_str_wvs
-                                )
-                                total_wages_wvs += daily_calc.get("Base", 0) + daily_calc.get("Commission", 0)
-                                total_sales_wvs += sales
+                            for name, data in wvs_data.items():
+                                hours = data["hours"]
+                                sales = data["sales"]
+                                if hours > 0 or sales > 0:
+                                    daily_calc = engine_wvs.calculate_daily_payment(
+                                        name, hours, sales, 0.0, date_str_wvs
+                                    )
+                                    base_pay = daily_calc.get("Base", 0)
+                                    commission = daily_calc.get("Commission", 0)
+                                    emp_cfg = employees_wvs.get(name)
+                                    if not emp_cfg:
+                                        for k, v in employees_wvs.items():
+                                            if k.lower() == name.lower():
+                                                emp_cfg = v
+                                                break
+                                    pt = (emp_cfg or {}).get("payment_type", "")
+                                    if pt in ("tiered_commission", "hybrid_daily_max"):
+                                        total_wages_wvs += max(base_pay, commission)
+                                    else:
+                                        total_wages_wvs += base_pay + commission
+                                    total_sales_wvs += sales
 
-                wage_pct = (total_wages_wvs / total_sales_wvs * 100) if total_sales_wvs > 0 else 0.0
-                target_pct = 25.0
+                    wage_pct = (total_wages_wvs / total_sales_wvs * 100) if total_sales_wvs > 0 else 0.0
+                    target_pct = 25.0
 
-                st.markdown("---")
-                st.markdown("### Result")
-                period_label = "period" if wvs_mode == "Date range" else "daily"
-                col_a, col_b, col_c = st.columns(3)
-                with col_a:
-                    st.metric(f"Total wages ({period_label})", format_currency(total_wages_wvs))
-                with col_b:
-                    st.metric("Total sales", format_currency(total_sales_wvs))
-                with col_c:
-                    st.metric("Wage % of sales", f"{wage_pct:.1f}%")
+                    st.markdown("---")
+                    st.markdown("### Result")
+                    period_label = "period" if wvs_mode == "Date range" else "daily"
+                    col_a, col_b, col_c = st.columns(3)
+                    with col_a:
+                        st.metric(f"Total wages ({period_label})", format_currency(total_wages_wvs))
+                    with col_b:
+                        st.metric("Total sales", format_currency(total_sales_wvs))
+                    with col_c:
+                        st.metric("Wage % of sales", f"{wage_pct:.2f}%")
 
-                if total_sales_wvs > 0:
-                    if wage_pct < target_pct - 1:
-                        st.success("🟢 **Under target** – wages are below 25% of sales.")
-                    elif wage_pct <= target_pct + 1:
-                        st.info("🟡 **On target** – wages are around 25% of sales.")
+                    if total_sales_wvs > 0:
+                        if wage_pct < target_pct - 1:
+                            st.success("🟢 **Under target** – wages are below 25% of sales.")
+                        elif wage_pct <= target_pct + 1:
+                            st.info("🟡 **On target** – wages are around 25% of sales.")
+                        else:
+                            st.error("🔴 **Over target** – wages are above 25% of sales.")
                     else:
-                        st.error("🔴 **Over target** – wages are above 25% of sales.")
-                else:
-                    st.info("Enter hours and sales above to see the wage % and target indicator.")
+                        st.info("Enter hours and sales above to see the wage % and target indicator.")
 
-                st.caption("💡 Save to Airtable will be available in a future update.")
+                    st.caption("💡 Save to Airtable will be available in a future update.")
 
     with tab6:
         st.header("📋 Data Management")

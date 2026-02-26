@@ -238,12 +238,12 @@ class DataProcessor:
         column_headers = {}
         in_data_section = False
         
-        for idx, row in df.iterrows():
+        for row_num, (idx, row) in enumerate(df.iterrows()):
             # Convert row to list, handling NaN values
             row_values = [str(val).strip() if pd.notna(val) else '' for val in row.values]
             
-            if idx < 10:
-                logger.debug(f"Row {idx}: {row_values[:5]}")
+            if row_num < 10:
+                logger.debug(f"Row {row_num}: {row_values[:5]}")
             
             # Check for employee header row (usually has "Employee:" in first column)
             if len(row_values) > 0 and row_values[0] and 'Employee:' in str(row_values[0]):
@@ -257,10 +257,10 @@ class DataProcessor:
                 
                 # If we were processing a previous employee, log it
                 if current_employee and in_data_section:
-                    logger.info(f"Row {idx}: Ending section for previous employee '{current_employee}' (found new employee '{new_employee}')")
+                    logger.info(f"Row {row_num}: Ending section for previous employee '{current_employee}' (found new employee '{new_employee}')")
                 
                 current_employee = new_employee
-                logger.info(f"Found employee section at row {idx}: '{current_employee}'")
+                logger.info(f"Found employee section at row {row_num}: '{current_employee}'")
                 in_data_section = False
                 column_headers = {}
                 continue
@@ -269,7 +269,7 @@ class DataProcessor:
             if not any(row_values) or all(not val or str(val).strip() == '' for val in row_values):
                 if in_data_section and current_employee:
                     # Empty row after data section - end of employee section
-                    logger.debug(f"Row {idx}: Empty row, ending section for {current_employee}")
+                    logger.debug(f"Row {row_num}: Empty row, ending section for {current_employee}")
                     current_employee = None
                     in_data_section = False
                 continue
@@ -278,11 +278,11 @@ class DataProcessor:
             first_val = str(row_values[0]).strip().lower() if row_values[0] else ''
             
             # Debug: Check if we should be processing this row (before header check)
-            if idx < 20 and first_val != 'date':
-                logger.debug(f"Row {idx}: in_data_section={in_data_section}, current_employee={current_employee}, has_headers={len(column_headers) > 0}, first_val='{row_values[0] if row_values else 'N/A'}'")
+            if row_num < 20 and first_val != 'date':
+                logger.debug(f"Row {row_num}: in_data_section={in_data_section}, current_employee={current_employee}, has_headers={len(column_headers) > 0}, first_val='{row_values[0] if row_values else 'N/A'}'")
             
             if first_val == 'date':
-                logger.info(f"Found header row at row {idx}: {row_values[:5]}")
+                logger.info(f"Found header row at row {row_num}: {row_values[:5]}")
                 logger.info(f"  Current employee: {current_employee}, in_data_section: {in_data_section}")
                 # Map column positions to header names
                 column_headers = {}
@@ -296,13 +296,13 @@ class DataProcessor:
                 continue
             
             # Debug: Log state for data rows
-            if idx < 20 and not (row_values[0] and 'Employee:' in str(row_values[0])) and first_val != 'date':
-                logger.debug(f"Row {idx}: Checking if data row - in_data_section={in_data_section}, current_employee={current_employee}, has_headers={len(column_headers) > 0}, first_val='{row_values[0] if row_values else 'N/A'}'")
+            if row_num < 20 and not (row_values[0] and 'Employee:' in str(row_values[0])) and first_val != 'date':
+                logger.debug(f"Row {row_num}: Checking if data row - in_data_section={in_data_section}, current_employee={current_employee}, has_headers={len(column_headers) > 0}, first_val='{row_values[0] if row_values else 'N/A'}'")
             
             # If we have headers and an employee, process data row
             if in_data_section and current_employee and column_headers:
-                if idx < 10:
-                    logger.info(f"Row {idx}: Processing as data row for {current_employee}")
+                if row_num < 10:
+                    logger.info(f"Row {row_num}: Processing as data row for {current_employee}")
                     logger.info(f"  Row values: {row_values[:5]}")
                 # Extract data using column headers
                 try:
@@ -313,22 +313,22 @@ class DataProcessor:
                     else:
                         date_val = row_values[0] if len(row_values) > 0 else None
                     
-                    if idx < 10:
+                    if row_num < 10:
                         logger.info(f"  Date extraction: date_col_idx={date_col_idx}, date_val='{date_val}'")
                     
                     if not date_val or str(date_val).strip() == '':
-                        if idx < 20:
-                            logger.warning(f"Row {idx}: No date value found (date_col_idx={date_col_idx}, row_values length={len(row_values)})")
+                        if row_num < 20:
+                            logger.warning(f"Row {row_num}: No date value found (date_col_idx={date_col_idx}, row_values length={len(row_values)})")
                         continue
                     
                     parsed_date = self.smart_date_parser(date_val)
                     
                     if not parsed_date:
-                        if idx < 20:
-                            logger.warning(f"Row {idx}: Could not parse date '{date_val}' (type: {type(date_val)})")
+                        if row_num < 20:
+                            logger.warning(f"Row {row_num}: Could not parse date '{date_val}' (type: {type(date_val)})")
                         continue
                     
-                    if idx < 10:
+                    if row_num < 10:
                         logger.info(f"  ✓ Parsed date = {parsed_date} from '{date_val}'")
                     
                     # Extract hours
@@ -337,26 +337,26 @@ class DataProcessor:
                     if hours_key < len(row_values):
                         try:
                             hours_val = row_values[hours_key]
-                            if idx < 10:
+                            if row_num < 10:
                                 logger.info(f"  Hours extraction: hours_key={hours_key}, hours_val='{hours_val}' (type: {type(hours_val)})")
                             if hours_val and str(hours_val).strip():
                                 hours = float(hours_val)
-                                if idx < 10:
+                                if row_num < 10:
                                     logger.info(f"  ✓ Parsed hours = {hours}")
                         except (ValueError, TypeError) as e:
-                            if idx < 10:
-                                logger.warning(f"Row {idx}: Error parsing hours '{row_values[hours_key] if hours_key < len(row_values) else 'N/A'}': {e}")
+                            if row_num < 10:
+                                logger.warning(f"Row {row_num}: Error parsing hours '{row_values[hours_key] if hours_key < len(row_values) else 'N/A'}': {e}")
                             pass
                     else:
-                        if idx < 10:
+                        if row_num < 10:
                             logger.warning(f"  Hours key {hours_key} >= row length {len(row_values)}")
                     
                     if hours <= 0:
-                        if idx < 20:
-                            logger.warning(f"Row {idx}: Hours <= 0 ({hours}), skipping. hours_key={hours_key}, value='{row_values[hours_key] if hours_key < len(row_values) else 'N/A'}'")
+                        if row_num < 20:
+                            logger.warning(f"Row {row_num}: Hours <= 0 ({hours}), skipping. hours_key={hours_key}, value='{row_values[hours_key] if hours_key < len(row_values) else 'N/A'}'")
                         continue
                     
-                    if idx < 10:
+                    if row_num < 10:
                         logger.info(f"  ✓ Valid data row - Employee: {current_employee}, Date: {parsed_date}, Hours: {hours}")
                     
                     # Extract other fields
@@ -410,12 +410,12 @@ class DataProcessor:
                     }
                     cleaned.append(record)
                     
-                    if idx < 10:
+                    if row_num < 10:
                         logger.info(f"  ✓ Record created: Employee={mapped_name}, Date={parsed_date}, Hours={hours}, Sales={sales}")
                 
                 except Exception as e:
-                    if idx < 10:
-                        logger.error(f"Row {idx}: Error processing row: {e}", exc_info=True)
+                    if row_num < 10:
+                        logger.error(f"Row {row_num}: Error processing row: {e}", exc_info=True)
                     continue
         
         logger.info(f"Sectioned CSV parsing complete: {len(cleaned)} records created")
@@ -437,23 +437,23 @@ class DataProcessor:
         
         logger.info(f"Total rows to process: {len(df)}")
         
-        for idx, row in df.iterrows():
-            if idx == 0:
+        for row_num, (idx, row) in enumerate(df.iterrows()):
+            if row_num == 0:
                 logger.info(f"Row 0 sample: {row.to_dict()}")
             
             row_dict = row.to_dict()
             keys = list(row_dict.keys())
             
             if len(keys) == 0:
-                if idx < 5:
-                    logger.debug(f"Row {idx}: Empty row, skipping")
+                if row_num < 5:
+                    logger.debug(f"Row {row_num}: Empty row, skipping")
                 continue
             
             first_col = row_dict.get(keys[0])
             second_col = row_dict.get(keys[1]) if len(keys) > 1 else None
             
-            if idx < 5:
-                logger.debug(f"Row {idx}: first_col={first_col}, second_col={second_col}, keys={keys[:3]}")
+            if row_num < 5:
+                logger.debug(f"Row {row_num}: first_col={first_col}, second_col={second_col}, keys={keys[:3]}")
             
             # Check for employee header in column name
             first_col_name = keys[0] if keys else None
@@ -464,7 +464,7 @@ class DataProcessor:
                     current_employee = ' '.join([p.strip() for p in parts])
                 else:
                     current_employee = employee_part
-                logger.info(f"Found employee in column name (row {idx}): '{current_employee}'")
+                logger.info(f"Found employee in column name (row {row_num}): '{current_employee}'")
                 continue
             
             # Check for employee header in cell value
@@ -475,18 +475,18 @@ class DataProcessor:
                     current_employee = ' '.join([p.strip() for p in parts])
                 else:
                     current_employee = employee_part if second_col is None else f"{employee_part} {second_col}".strip()
-                logger.info(f"Found employee in cell value (row {idx}): '{current_employee}'")
+                logger.info(f"Found employee in cell value (row {row_num}): '{current_employee}'")
                 column_headers = {}
                 continue
             
             if not current_employee:
-                if idx < 10:
-                    logger.debug(f"Row {idx}: No current employee set, skipping")
+                if row_num < 10:
+                    logger.debug(f"Row {row_num}: No current employee set, skipping")
                 continue
             
             # Check for column header row
             if first_col == 'Date' or (first_col and str(first_col).lower() == 'date'):
-                logger.info(f"Found header row at row {idx}")
+                logger.info(f"Found header row at row {row_num}")
                 for key in keys:
                     header_value = row_dict.get(key)
                     if header_value and header_value != '':
@@ -501,12 +501,12 @@ class DataProcessor:
             # Parse date
             parsed_date = self.smart_date_parser(first_col)
             if not parsed_date:
-                if idx < 10:
-                    logger.debug(f"Row {idx}: Could not parse date from '{first_col}'")
+                if row_num < 10:
+                    logger.debug(f"Row {row_num}: Could not parse date from '{first_col}'")
                 continue
             
-            if idx < 5:
-                logger.debug(f"Row {idx}: Parsed date = {parsed_date}")
+            if row_num < 5:
+                logger.debug(f"Row {row_num}: Parsed date = {parsed_date}")
             
             # Extract hours
             hours_key = column_headers.get('Hours', keys[4] if len(keys) > 4 else None)
@@ -515,13 +515,13 @@ class DataProcessor:
                 try:
                     hours = float(row_dict.get(hours_key, 0))
                 except Exception as e:
-                    if idx < 5:
-                        logger.debug(f"Row {idx}: Error parsing hours: {e}")
+                    if row_num < 5:
+                        logger.debug(f"Row {row_num}: Error parsing hours: {e}")
                     pass
             
             if hours <= 0:
-                if idx < 10:
-                    logger.debug(f"Row {idx}: Hours <= 0 ({hours}), skipping")
+                if row_num < 10:
+                    logger.debug(f"Row {row_num}: Hours <= 0 ({hours}), skipping")
                 continue
             
             # Extract other fields
@@ -557,8 +557,8 @@ class DataProcessor:
             # Skip if name was excluded (returns None)
             if mapped_name is None:
                 mapping_stats['excluded'] += 1
-                if idx < 10:
-                    logger.debug(f"Row {idx}: Employee '{current_employee}' excluded")
+                if row_num < 10:
+                    logger.debug(f"Row {row_num}: Employee '{current_employee}' excluded")
                 continue
             
             # Track mapping if name changed
@@ -566,8 +566,8 @@ class DataProcessor:
                 mapping_stats['mapped'] += 1
                 if current_employee not in mapping_stats['mapping_details']:
                     mapping_stats['mapping_details'][current_employee] = mapped_name
-                if idx < 5:
-                    logger.info(f"Row {idx}: Mapped '{current_employee}' → '{mapped_name}'")
+                if row_num < 5:
+                    logger.info(f"Row {row_num}: Mapped '{current_employee}' → '{mapped_name}'")
             
             # Only add if we have a valid employee name
             if mapped_name:
@@ -586,7 +586,7 @@ class DataProcessor:
                 }
                 cleaned.append(record)
                 if len(cleaned) <= 5:
-                    logger.info(f"Row {idx}: Created record for {mapped_name} on {parsed_date} ({hours} hours, £{sales} sales)")
+                    logger.info(f"Row {row_num}: Created record for {mapped_name} on {parsed_date} ({hours} hours, £{sales} sales)")
         
         logger.info(f"=== Row-by-row Parsing Complete ===")
         logger.info(f"Total records created: {len(cleaned)}")
@@ -666,14 +666,14 @@ class DataProcessor:
         
         # Process each row
         logger.info(f"Processing {len(df)} rows...")
-        for idx, row in df.iterrows():
+        for row_num, (idx, row) in enumerate(df.iterrows()):
             try:
                 # Get date
                 date_val = row[date_col] if date_col else None
                 parsed_date = self.smart_date_parser(date_val)
                 if not parsed_date:
-                    if idx < 5:
-                        logger.debug(f"Row {idx}: Could not parse date '{date_val}'")
+                    if row_num < 5:
+                        logger.debug(f"Row {row_num}: Could not parse date '{date_val}'")
                     continue
                 
                 # Get employee
