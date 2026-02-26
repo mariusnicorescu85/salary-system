@@ -2586,20 +2586,20 @@ def main():
             if not results:
                 st.info("No calculation results available to send.")
             else:
-                # First: sender address
+                # First: sender address (key includes shop so values update when switching shops)
                 mgmt_from_email_input = st.text_input(
                     "From email (sender)",
                     value=default_from_email,
                     help="Sender address for management emails (usually the shop email).",
-                    key="management_from_email",
+                    key=f"management_from_email_{results_shop_key}",
                 )
-                # Second: management recipient list
+                # Second: management recipient list (key includes shop so values update when switching shops)
                 management_recipients_str = ", ".join(default_management_recipients)
                 management_recipients_input = st.text_input(
                     "Management recipient emails (comma-separated)",
                     value=management_recipients_str,
                     help="Management will receive the breakdowns for review and approval.",
-                    key="management_recipients",
+                    key=f"management_recipients_{results_shop_key}",
                 )
                 
                 col_mgmt1, col_mgmt2 = st.columns(2)
