@@ -128,7 +128,12 @@ class AirtableClient:
         new_records = []
         
         # Group records by type for efficient checking
-        daily_records = [r for r in records if r.get('RecordType') == 'Daily']
+        # Treat as Daily: explicit RecordType=='Daily' OR no RecordType but has Employee+Date (e.g. Wage vs Sales table)
+        daily_records = [
+            r for r in records
+            if r.get('RecordType') == 'Daily'
+            or (not r.get('RecordType') and (r.get('Employee') or r.get('employee')) and (r.get('Date') or r.get('date')))
+        ]
         summary_records = [r for r in records if r.get('RecordType') == 'Monthly Summary']
         
         # Check daily records (by Employee + Date, or Shop + Employee + Date when Shop is present)
@@ -141,12 +146,14 @@ class AirtableClient:
                 max_date = max(dates)
                 # Fetch ALL records (no formula) - most reliable; Airtable formulas can fail
                 # silently or return incomplete results. Filter Daily + date range in Python.
+                # Include records with RecordType=='Daily' OR no RecordType (Wage vs Sales table)
                 try:
                     all_records = table.all()
                     existing_keys = set()
                     for rec in all_records:
                         fields = rec.get('fields', {})
-                        if fields.get('RecordType') != 'Daily':
+                        rt = fields.get('RecordType')
+                        if rt is not None and rt != 'Daily':
                             continue
                         emp = _get_employee_field(fields)
                         date_val = fields.get('Date') or fields.get('date')
@@ -500,7 +507,8 @@ class AirtableClient:
     
     def append_daily_breakdown(self, base_id: str, table_name: str, 
                               breakdown_data: List[Dict], skip_duplicates: bool = True,
-                              update_existing: bool = False, upsert_mode: bool = False) -> Dict:
+                              update_existing: bool = False, upsert_mode: bool = False,
+                              exclude_fields: Optional[List[str]] = None) -> Dict:
         """
         Append daily breakdown data to Airtable
         
@@ -511,10 +519,16 @@ class AirtableClient:
             skip_duplicates: If True, skip records that already exist
             update_existing: If True, update existing records only (no creation)
             upsert_mode: If True, update existing and create new (both)
+            exclude_fields: Field names to omit when sending to Airtable (e.g. RecordType for Wage vs Sales table)
         
         Returns:
             Response from Airtable API
         """
+        def _strip_fields(records: List[Dict]) -> List[Dict]:
+            if not exclude_fields:
+                return records
+            return [{k: v for k, v in r.items() if k not in exclude_fields} for r in records]
+
         if update_existing and not upsert_mode:
             # Update ONLY existing records, don't create new ones
             return self.update_only_records(base_id, table_name, breakdown_data)
@@ -536,14 +550,14 @@ class AirtableClient:
                     'message': f'All {existing_count} records already exist in Airtable. No new records to append.'
                 }
             
-            # Only append new records
-            result = self.append_records(base_id, table_name, new_records)
+            # Only append new records (strip excluded fields before sending)
+            result = self.append_records(base_id, table_name, _strip_fields(new_records))
             result['skipped'] = existing_count
             result['message'] = f"Appended {result['records_created']} new records. Skipped {existing_count} existing records."
             return result
         else:
             # Append all records (original behavior)
-            return self.append_records(base_id, table_name, breakdown_data)
+            return self.append_records(base_id, table_name, _strip_fields(breakdown_data))
 
     def get_daily_breakdown_records(self, base_id: str, table_name: str) -> List[Dict]:
         """

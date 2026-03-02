@@ -3505,6 +3505,7 @@ Table Name: {repr(table_name)} (type: {type(table_name).__name__})
                                                 result = at_client_save.append_daily_breakdown(
                                                     base_id_wvs, table_name_wvs, airtable_records_wvs,
                                                     skip_duplicates=True,
+                                                    exclude_fields=["RecordType"] if is_wage_vs_sales_table else None,
                                                 )
                                             st.success(f"Saved {result.get('records_created', 0)} records to Airtable.")
                                             if result.get("skipped", 0) > 0:
@@ -3722,6 +3723,7 @@ Table Name: {repr(table_name)} (type: {type(table_name).__name__})
                                     result = at_client_save_manual.append_daily_breakdown(
                                         base_id_wvs, table_name_wvs_manual, airtable_records_wvs_manual,
                                         skip_duplicates=True,
+                                        exclude_fields=["RecordType"] if is_wage_vs_sales_table_manual else None,
                                     )
                                 st.success(f"Saved {result.get('records_created', 0)} records to Airtable.")
                                 if result.get("skipped", 0) > 0:
