@@ -3475,7 +3475,7 @@ Table Name: {repr(table_name)} (type: {type(table_name).__name__})
                                     config_full = load_config() or {}
                                     shop_config_wvs = config_full.get("shops", {}).get(shop_key_wvs, {})
                                     tables_cfg_wvs_save = config_full.get("airtable_config_tables", {})
-                                    table_name_wvs = shop_config_wvs.get("wage_vs_sales_table") or tables_cfg_wvs_save.get("wage_vs_sales") or shop_config_wvs.get("airtable_table_name", "")
+                                    table_name_wvs = shop_config_wvs.get("wage_vs_sales_table") or tables_cfg_wvs_save.get("wage_vs_sales") or ""
                                     if table_name_wvs and st.button("Save wage vs sales to Airtable", key="wvs_save_import_btn"):
                                         wage_vs_sales_table_name = shop_config_wvs.get("wage_vs_sales_table") or tables_cfg_wvs_save.get("wage_vs_sales") or ""
                                         is_wage_vs_sales_table = bool(wage_vs_sales_table_name) and table_name_wvs == wage_vs_sales_table_name
@@ -3519,7 +3519,7 @@ Table Name: {repr(table_name)} (type: {type(table_name).__name__})
                                                 import traceback
                                                 st.code(traceback.format_exc())
                                     elif not table_name_wvs:
-                                        st.caption("Configure wage_vs_sales in config/shops.yaml (airtable_config_tables) or airtable_table_name to save.")
+                                        st.caption("Configure wage_vs_sales_table per shop or wage_vs_sales in airtable_config_tables (config/shops.yaml) to save.")
                     else:
                         st.info("Upload a report file above, or pick one from the sidebar (Saved Reports / Google Drive).")
 
@@ -3685,7 +3685,7 @@ Table Name: {repr(table_name)} (type: {type(table_name).__name__})
                         config_full_manual = load_config() or {}
                         shop_config_wvs_manual = config_full_manual.get("shops", {}).get(shop_key_wvs, {})
                         tables_cfg_wvs_manual = config_full_manual.get("airtable_config_tables", {})
-                        table_name_wvs_manual = shop_config_wvs_manual.get("wage_vs_sales_table") or tables_cfg_wvs_manual.get("wage_vs_sales") or shop_config_wvs_manual.get("airtable_table_name", "")
+                        table_name_wvs_manual = shop_config_wvs_manual.get("wage_vs_sales_table") or tables_cfg_wvs_manual.get("wage_vs_sales") or ""
                         if table_name_wvs_manual and st.button("Save wage vs sales to Airtable", key="wvs_save_manual_btn"):
                             wage_vs_sales_table_name_manual = shop_config_wvs_manual.get("wage_vs_sales_table") or tables_cfg_wvs_manual.get("wage_vs_sales") or ""
                             is_wage_vs_sales_table_manual = bool(wage_vs_sales_table_name_manual) and table_name_wvs_manual == wage_vs_sales_table_name_manual
@@ -3729,7 +3729,7 @@ Table Name: {repr(table_name)} (type: {type(table_name).__name__})
                                     import traceback
                                     st.code(traceback.format_exc())
                         elif not table_name_wvs_manual:
-                            st.caption("Configure wage_vs_sales in config/shops.yaml (airtable_config_tables) or airtable_table_name to save.")
+                            st.caption("Configure wage_vs_sales_table per shop or wage_vs_sales in airtable_config_tables (config/shops.yaml) to save.")
 
     with tab6:
         st.header("📋 Data Management")
