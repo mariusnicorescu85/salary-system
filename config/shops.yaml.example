@@ -1,0 +1,41 @@
+# Copy this file to shops.yaml and fill in your values.
+# Local: config/shops.yaml
+# Streamlit Cloud: paste the content into Secrets as [app_config] yaml = '''...'''
+
+airtable_config_tables:
+  employees: "Employees"
+  commission_tiers: "Commission Tiers"
+  name_mappings: "Name Mappings"
+  sales_bonus_thresholds: "Sales Bonus Thresholds"
+  monthly_bonus: "Monthly Bonuses"
+  shop_targets: "Shop Targets"
+  daily_targets: "Daily Targets"
+  uk_wage_bracket: "UK Wage Bracket"
+  shop_analytics: "Shop Analytics"
+  wage_vs_sales: "Wage vs Sales"
+
+shops:
+  pyt:
+    name: "PYT Hairstyle"
+    shop_display_name: "PYT"
+    google_drive_folder_id: ""
+    saved_reports_folder_id: ""
+    airtable_base_id: ""
+    airtable_table_name: "PYT Daily Breakdowns"
+    wage_vs_sales_table: "Wage vs Sales"
+    email:
+      from_email: ""
+      invoice_submission_email: ""
+      management_recipients: []
+  opatra:
+    name: "Opatra"
+    shop_display_name: "Opatra"
+    google_drive_folder_id: ""
+    saved_reports_folder_id: ""
+    airtable_base_id: ""
+    airtable_table_name: "Opatra Daily Breakdowns"
+    wage_vs_sales_table: "Wage vs Sales"
+    email:
+      from_email: ""
+      invoice_submission_email: ""
+      management_recipients: []

@@ -401,11 +401,14 @@ def load_config():
                 return yaml.safe_load(f)
     # Fallback: Streamlit Cloud - config stored in Secrets (Settings → Secrets)
     try:
-        if hasattr(st, "secrets") and st.secrets.get("app_config", {}).get("yaml"):
+        if hasattr(st, "secrets") and "app_config" in st.secrets and "yaml" in st.secrets["app_config"]:
             return yaml.safe_load(st.secrets["app_config"]["yaml"])
     except Exception:
         pass
-    st.error("Configuration not found. Use config/shops.yaml (local) or app_config.yaml in Streamlit Secrets (Cloud).")
+    st.error(
+        "Configuration not found. **Local:** create `config/shops.yaml` (copy from `config/shops.yaml.example`). "
+        "**Streamlit Cloud:** add `[app_config]` with `yaml = '''...'''` (your shops.yaml content) in Settings → Secrets."
+    )
     return None
 
 
@@ -3831,7 +3834,7 @@ Table Name: {repr(table_name)} (type: {type(table_name).__name__})
         shop_display = shop_config.get("shop_display_name") or shop_config.get("name", selected_shop)
         shop_options = [s.get("shop_display_name") or s.get("name", k) for k, s in config["shops"].items()]
         payment_types = [
-            "hourly_only", "commission_only", "manager",
+            "hourly_only", "commission_only", "manager", "sales_only",
             "progressive_tiered_commission", "hybrid_daily_max",
             "flat_rate_tiered_commission", "flat_rate_tiered_commission_with_transport",
             "tiered_commission", "molly_commission", "alex_hybrid", "net_commission_tiered"
@@ -4003,6 +4006,8 @@ Table Name: {repr(table_name)} (type: {type(table_name).__name__})
                         return "30-35% NET"
                     if payment_type in ("hourly_only", "manager", "HourlyOnly"):
                         return "Hourly"
+                    if payment_type in ("sales_only", "SalesOnly"):
+                        return "0% (external pay)"
                     return payment_type or "N/A"
 
                 def _pay_description(emp_name: str, payment_type: str) -> str:

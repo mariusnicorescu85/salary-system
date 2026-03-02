@@ -213,6 +213,12 @@ class CalculationEngine:
             result['Commission'] = 0.0
             result['PaymentType'] = 'HourlyOnly'
         
+        elif payment_type == 'sales_only':
+            # Sales count toward shop totals; pay is external/not calculated here (e.g. manager with special arrangement)
+            result['Base'] = 0.0
+            result['Commission'] = 0.0
+            result['PaymentType'] = 'SalesOnly'
+        
         elif payment_type == 'tiered_commission':
             # Tuba's case - calculate both hourly and commission
             hourly_pay = hours * hourly_rate
@@ -478,6 +484,11 @@ class CalculationEngine:
             
             base_payment = transport + total_commission + rent_amount + total_bonus + manual_hours_pay
             final_payment = base_payment - deductions - advance
+        
+        elif payment_type == 'sales_only':
+            # Pay is external/not calculated here; sales still count toward shop totals
+            base_payment = 0.0
+            final_payment = 0.0
         
         else:
             # All other staff: Hourly + Bonus + Manual Hours - Deductions - Rent
