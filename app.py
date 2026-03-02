@@ -393,13 +393,19 @@ def _load_gdrive_report(file_id: str, filename: str):
 
 @st.cache_data(ttl=60)
 def load_config():
-    """Load shop configuration"""
+    """Load shop configuration from config/shops.yaml (local) or st.secrets (Streamlit Cloud)."""
     base = Path(__file__).resolve().parent
     for config_path in [base / 'config' / 'shops.yaml', Path('config/shops.yaml')]:
         if config_path.exists():
             with open(config_path, 'r') as f:
                 return yaml.safe_load(f)
-    st.error("Configuration file not found. Please create config/shops.yaml")
+    # Fallback: Streamlit Cloud - config stored in Secrets (Settings → Secrets)
+    try:
+        if hasattr(st, "secrets") and st.secrets.get("app_config", {}).get("yaml"):
+            return yaml.safe_load(st.secrets["app_config"]["yaml"])
+    except Exception:
+        pass
+    st.error("Configuration not found. Use config/shops.yaml (local) or app_config.yaml in Streamlit Secrets (Cloud).")
     return None
 
 
