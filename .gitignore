@@ -49,6 +49,9 @@ Thumbs.db
 .streamlit/secrets.toml
 # Keep config.toml but ignore secrets
 
+# Shop config (contains base IDs, emails; use app_config.yaml in Streamlit Secrets for Cloud)
+config/shops.yaml
+
 # Logs
 *.log
 
