@@ -3493,29 +3493,43 @@ Table Name: {repr(table_name)} (type: {type(table_name).__name__})
                                             pct = r.get("_wage_pct_raw")
                                             wage_pct_val = round(pct, 2) if pct is not None and pct == pct else None  # exclude NaN
                                             emp_name = r["Employee"]
-                                            rec = {
-                                                "RecordType": "Daily",
-                                                "Date": r["Date"],
-                                                "Hours": r["Hours"],
-                                                "Sales": r.get("_sales_only_raw", 0),
-                                                "AddlSales": r.get("_addl_raw", 0),
-                                                "HrlyRate": r.get("_hrly_rate_raw", 0),
-                                                "Base": r.get("_base_raw", 0),
-                                                "Commission": r.get("_commission_raw", 0),
-                                                "PaymentType": r.get("_payment_type_raw", ""),
-                                            }
+                                            sales_val = r.get("_sales_only_raw", 0)
+                                            addl_val = r.get("_addl_raw", 0)
+                                            base_val = r.get("_base_raw", 0)
+                                            commission_val = r.get("_commission_raw", 0)
                                             if is_wage_vs_sales_table:
-                                                rec["Shop"] = shop_display_wvs
+                                                rec = {
+                                                    "Shop": shop_display_wvs,
+                                                    "Date": r["Date"],
+                                                    "Hours": r["Hours"],
+                                                    "Sales": sales_val,
+                                                    "Add'l Sales": addl_val,
+                                                    "Total Sales": r.get("_sales_raw", sales_val + addl_val),
+                                                    "Base": base_val,
+                                                    "Commission": commission_val,
+                                                    "Total Wages": r.get("_wages_raw", base_val + commission_val),
+                                                }
                                                 emp_link_field = tables_cfg_wvs_save.get("wage_vs_sales_employee_link_field") or shop_config_wvs.get("wage_vs_sales_employee_link_field") or "Employee"
                                                 emp_id = emp_name_to_id.get(emp_name) or emp_name_to_id.get(emp_name.strip())
                                                 if emp_id:
                                                     rec[emp_link_field] = [emp_id]
                                                 else:
                                                     rec[emp_link_field] = emp_name
+                                                if wage_pct_val is not None:
+                                                    rec["Wage %"] = wage_pct_val
                                             else:
-                                                rec["Employee"] = emp_name
-                                            if wage_pct_val is not None and is_wage_vs_sales_table:
-                                                rec["Wage %"] = wage_pct_val
+                                                rec = {
+                                                    "RecordType": "Daily",
+                                                    "Employee": emp_name,
+                                                    "Date": r["Date"],
+                                                    "Hours": r["Hours"],
+                                                    "Sales": sales_val,
+                                                    "AddlSales": addl_val,
+                                                    "HrlyRate": r.get("_hrly_rate_raw", 0),
+                                                    "Base": base_val,
+                                                    "Commission": commission_val,
+                                                    "PaymentType": r.get("_payment_type_raw", ""),
+                                                }
                                             airtable_records_wvs.append(rec)
                                         try:
                                             with st.spinner("Saving to Airtable..."):
@@ -3523,7 +3537,6 @@ Table Name: {repr(table_name)} (type: {type(table_name).__name__})
                                                 result = at_client_save.append_daily_breakdown(
                                                     base_id_wvs, table_name_wvs, airtable_records_wvs,
                                                     skip_duplicates=True,
-                                                    exclude_fields=["RecordType"] if is_wage_vs_sales_table else None,
                                                 )
                                             st.success(f"Saved {result.get('records_created', 0)} records to Airtable.")
                                             if result.get("skipped", 0) > 0:
@@ -3728,29 +3741,43 @@ Table Name: {repr(table_name)} (type: {type(table_name).__name__})
                                 pct = r.get("_wage_pct_raw")
                                 wage_pct_val = round(pct, 2) if pct is not None and pct == pct else None  # exclude NaN
                                 emp_name = r["Employee"]
-                                rec = {
-                                    "RecordType": "Daily",
-                                    "Date": r["Date"],
-                                    "Hours": r["Hours"],
-                                    "Sales": r.get("_sales_only_raw", 0),
-                                    "AddlSales": r.get("_addl_raw", 0),
-                                    "HrlyRate": r.get("_hrly_rate_raw", 0),
-                                    "Base": r.get("_base_raw", 0),
-                                    "Commission": r.get("_commission_raw", 0),
-                                    "PaymentType": r.get("_payment_type_raw", ""),
-                                }
+                                sales_val = r.get("_sales_only_raw", 0)
+                                addl_val = r.get("_addl_raw", 0)
+                                base_val = r.get("_base_raw", 0)
+                                commission_val = r.get("_commission_raw", 0)
                                 if is_wage_vs_sales_table_manual:
-                                    rec["Shop"] = shop_display_wvs_manual
+                                    rec = {
+                                        "Shop": shop_display_wvs_manual,
+                                        "Date": r["Date"],
+                                        "Hours": r["Hours"],
+                                        "Sales": sales_val,
+                                        "Add'l Sales": addl_val,
+                                        "Total Sales": sales_val + addl_val,
+                                        "Base": base_val,
+                                        "Commission": commission_val,
+                                        "Total Wages": base_val + commission_val,
+                                    }
                                     emp_link_field_manual = tables_cfg_wvs_manual.get("wage_vs_sales_employee_link_field") or shop_config_wvs_manual.get("wage_vs_sales_employee_link_field") or "Employee"
                                     emp_id = emp_name_to_id_manual.get(emp_name) or emp_name_to_id_manual.get(emp_name.strip())
                                     if emp_id:
                                         rec[emp_link_field_manual] = [emp_id]
                                     else:
                                         rec[emp_link_field_manual] = emp_name
+                                    if wage_pct_val is not None:
+                                        rec["Wage %"] = wage_pct_val
                                 else:
-                                    rec["Employee"] = emp_name
-                                if wage_pct_val is not None and is_wage_vs_sales_table_manual:
-                                    rec["Wage %"] = wage_pct_val
+                                    rec = {
+                                        "RecordType": "Daily",
+                                        "Employee": emp_name,
+                                        "Date": r["Date"],
+                                        "Hours": r["Hours"],
+                                        "Sales": sales_val,
+                                        "AddlSales": addl_val,
+                                        "HrlyRate": r.get("_hrly_rate_raw", 0),
+                                        "Base": base_val,
+                                        "Commission": commission_val,
+                                        "PaymentType": r.get("_payment_type_raw", ""),
+                                    }
                                 airtable_records_wvs_manual.append(rec)
                             try:
                                 with st.spinner("Saving to Airtable..."):
@@ -3758,7 +3785,6 @@ Table Name: {repr(table_name)} (type: {type(table_name).__name__})
                                     result = at_client_save_manual.append_daily_breakdown(
                                         base_id_wvs, table_name_wvs_manual, airtable_records_wvs_manual,
                                         skip_duplicates=True,
-                                        exclude_fields=["RecordType"] if is_wage_vs_sales_table_manual else None,
                                     )
                                 st.success(f"Saved {result.get('records_created', 0)} records to Airtable.")
                                 if result.get("skipped", 0) > 0:

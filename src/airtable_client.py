@@ -46,8 +46,11 @@ def _normalize_date_for_key(date_val: Any) -> Optional[str]:
 
 
 def _get_employee_field(fields: Dict) -> str:
-    """Get Employee value from Airtable record, handling field name casing."""
-    return (fields.get('Employee') or fields.get('employee') or '').strip()
+    """Get Employee value from Airtable record, handling field name casing and linked records."""
+    val = fields.get('Employee') or fields.get('employee') or fields.get('Employees') or fields.get('employees')
+    if isinstance(val, list) and val:
+        return str(val[0])
+    return (val or '').strip() if isinstance(val, str) else ''
 
 
 class AirtableClient:
@@ -164,7 +167,8 @@ class AirtableClient:
                             existing_keys.add(key)
                     
                     for record in daily_records:
-                        emp = (record.get('Employee') or record.get('employee') or '').strip()
+                        emp_val = record.get('Employee') or record.get('employee') or record.get('Employees') or record.get('employees')
+                        emp = str(emp_val[0]) if isinstance(emp_val, list) and emp_val else (emp_val or '').strip() if isinstance(emp_val, str) else ''
                         date_str = _normalize_date_for_key(record.get('Date') or record.get('date'))
                         shop = (record.get('Shop') or record.get('shop') or '').strip() if use_shop else ''
                         key = (shop, emp, date_str) if use_shop else (emp, date_str)
