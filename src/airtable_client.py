@@ -777,7 +777,8 @@ class AirtableClient:
                     emp = emp_ids.strip()
             if not emp:
                 continue
-            out[emp] = {
+            emp_key = (emp.strip() if isinstance(emp, str) else emp)
+            out[emp_key] = {
                 "dailySalesBonus": fields.get("Daily Sales Bonus") or fields.get("dailySalesBonus") or 0,
                 "firstLastHourBonus": fields.get("First Last Hour Bonus") or fields.get("firstLastHourBonus") or 0,
                 "socialMediaBonus": fields.get("Social Media Bonus") or fields.get("socialMediaBonus") or 0,
@@ -889,6 +890,7 @@ class AirtableClient:
         except Exception:
             existing = []
         by_emp = {}
+        by_emp_norm = {}  # normalized key (strip+lower) -> original key for lookup
         id_to_name = {v: k for k, v in (employee_name_to_id or {}).items()}
         for r in existing:
             fields = r.get("fields", {})
@@ -898,11 +900,20 @@ class AirtableClient:
                 if isinstance(emp_ids, list) and emp_ids:
                     emp = id_to_name.get(emp_ids[0])
             if emp:
-                by_emp[emp] = r
+                emp_key = (emp.strip() if isinstance(emp, str) else emp)
+                by_emp[emp_key] = r
+                by_emp_norm[(emp_key.lower() if isinstance(emp_key, str) else emp_key)] = emp_key
+        name_to_id = employee_name_to_id or {}
         to_update = []
         to_create = []
         for emp, data in (bonuses or {}).items():
-            emp_id = (employee_name_to_id or {}).get(emp)
+            emp_norm = (emp.strip() if isinstance(emp, str) else emp)
+            emp_id = name_to_id.get(emp) or name_to_id.get(emp_norm)
+            if not emp_id:
+                for k, vid in name_to_id.items():
+                    if k and (k.strip().lower() == (emp_norm.lower() if isinstance(emp_norm, str) else emp_norm)):
+                        emp_id = vid
+                        break
             fields = {
                 "Month": month_key,
                 "Daily Sales Bonus": data.get("dailySalesBonus", 0),
@@ -925,8 +936,13 @@ class AirtableClient:
                 fields["Employee"] = emp
             if shop_display_name:
                 fields["Shop"] = shop_display_name
-            if emp in by_emp:
-                to_update.append({"id": by_emp[emp]["id"], "fields": fields})
+            # Match existing record by normalized name to avoid creating duplicates
+            existing_record = by_emp.get(emp_norm) or by_emp.get(emp)
+            if not existing_record and isinstance(emp_norm, str):
+                existing_key = by_emp_norm.get(emp_norm.lower())
+                existing_record = by_emp.get(existing_key) if existing_key else None
+            if existing_record:
+                to_update.append({"id": existing_record["id"], "fields": fields})
             else:
                 to_create.append(fields)
         for i in range(0, len(to_update), 10):
@@ -1126,7 +1142,7 @@ class AirtableClient:
             shop_esc = (shop_display_name or "").replace('\\', '\\\\').replace('"', '\\"')
             emp_rows = emp_table.all(formula=f'{{Shop}} = "{shop_esc}"')
             for rec in emp_rows:
-                name = rec.get("fields", {}).get("Name", "")
+                name = (rec.get("fields", {}).get("Name", "") or "").strip()
                 if name:
                     id_to_name[rec["id"]] = name
         except Exception:

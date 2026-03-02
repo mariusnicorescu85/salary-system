@@ -1658,33 +1658,43 @@ def main():
             if selected_employee_bonus:
                 base_bonuses = bonuses.get(selected_employee_bonus, {})
                 current_bonuses = month_bonuses_data.get(selected_employee_bonus, {})
+                found_in_airtable = bool(current_bonuses)
+                if not current_bonuses:
+                    # Fallback: match by normalized name (handles whitespace/case differences)
+                    norm = selected_employee_bonus.strip().lower()
+                    for k, v in month_bonuses_data.items():
+                        if k and (k.strip().lower() == norm):
+                            current_bonuses = v
+                            found_in_airtable = True
+                            break
                 if not current_bonuses:
                     current_bonuses = base_bonuses.copy()
                 
                 st.markdown("---")
-                saved_badge = " ✓ Saved" if selected_employee_bonus in saved_employees else " (not yet saved)"
+                saved_badge = " ✓ Saved" if (selected_employee_bonus in saved_employees or found_in_airtable) else " (not yet saved)"
                 st.subheader(f"Bonuses for {selected_employee_bonus}{saved_badge}")
                 
-                with st.form(f"bonus_form_{selected_employee_bonus}"):
+                ke = selected_employee_bonus.replace(" ", "_")  # unique key suffix per employee
+                with st.form(f"bonus_form_{ke}"):
                     c1, c2 = st.columns(2)
                     with c1:
                         st.markdown("### 💰 Bonuses")
-                        daily_sales_bonus = st.number_input("Daily Sales Bonus", value=float(current_bonuses.get('dailySalesBonus', 0)), step=1.0, key="b_daily_sales")
-                        first_last_hour = st.number_input("First/Last Hour Bonus", value=float(current_bonuses.get('firstLastHourBonus', 0)), step=1.0, key="b_first_last")
-                        social_media = st.number_input("Social Media Bonus", value=float(current_bonuses.get('socialMediaBonus', 0)), step=1.0, key="b_social_media")
-                        management = st.number_input("Management Bonus", value=float(current_bonuses.get('managementBonus', 0)), step=1.0, key="b_management")
-                        management_consistency = st.number_input("Management Consistency Bonus", value=float(current_bonuses.get('managementConsistencyBonus', 0)), step=1.0, key="b_mgmt_cons")
-                        transport_fuel = st.number_input("Transport/Fuel", value=float(current_bonuses.get('transportFuel', 0)), step=1.0, key="b_transport")
-                        personal_sales = st.number_input("Personal Sales Bonus", value=float(current_bonuses.get('personalSalesBonus', 0)), step=1.0, key="b_personal_sales")
-                        extra_bonus = st.number_input("Extra Bonus", value=float(current_bonuses.get('extraBonus', 0)), step=1.0, key="b_extra")
-                        daily_allowance = st.number_input("Daily Allowance", value=float(current_bonuses.get('dailyAllowance', 0)), step=1.0, key="b_daily_allowance")
+                        daily_sales_bonus = st.number_input("Daily Sales Bonus", value=float(current_bonuses.get('dailySalesBonus', 0)), step=1.0, key=f"b_daily_sales_{ke}")
+                        first_last_hour = st.number_input("First/Last Hour Bonus", value=float(current_bonuses.get('firstLastHourBonus', 0)), step=1.0, key=f"b_first_last_{ke}")
+                        social_media = st.number_input("Social Media Bonus", value=float(current_bonuses.get('socialMediaBonus', 0)), step=1.0, key=f"b_social_media_{ke}")
+                        management = st.number_input("Management Bonus", value=float(current_bonuses.get('managementBonus', 0)), step=1.0, key=f"b_management_{ke}")
+                        management_consistency = st.number_input("Management Consistency Bonus", value=float(current_bonuses.get('managementConsistencyBonus', 0)), step=1.0, key=f"b_mgmt_cons_{ke}")
+                        transport_fuel = st.number_input("Transport/Fuel", value=float(current_bonuses.get('transportFuel', 0)), step=1.0, key=f"b_transport_{ke}")
+                        personal_sales = st.number_input("Personal Sales Bonus", value=float(current_bonuses.get('personalSalesBonus', 0)), step=1.0, key=f"b_personal_sales_{ke}")
+                        extra_bonus = st.number_input("Extra Bonus", value=float(current_bonuses.get('extraBonus', 0)), step=1.0, key=f"b_extra_{ke}")
+                        daily_allowance = st.number_input("Daily Allowance", value=float(current_bonuses.get('dailyAllowance', 0)), step=1.0, key=f"b_daily_allowance_{ke}")
                     with c2:
                         st.markdown("### 📊 Other")
-                        manual_hours = st.number_input("Manual Hours", value=float(current_bonuses.get('manualHours', 0)), step=0.5, key="b_manual_hours")
-                        deductions = st.number_input("Deductions", value=float(current_bonuses.get('deductions', 0)), step=1.0, key="b_deductions")
-                        rent = st.number_input("Rent", value=float(current_bonuses.get('rent', 0)), step=1.0, key="b_rent")
+                        manual_hours = st.number_input("Manual Hours", value=float(current_bonuses.get('manualHours', 0)), step=0.5, key=f"b_manual_hours_{ke}")
+                        deductions = st.number_input("Deductions", value=float(current_bonuses.get('deductions', 0)), step=1.0, key=f"b_deductions_{ke}")
+                        rent = st.number_input("Rent", value=float(current_bonuses.get('rent', 0)), step=1.0, key=f"b_rent_{ke}")
                         base_advance = employees.get(selected_employee_bonus, {}).get('advance', 0)
-                        advance = st.number_input("Advance", value=float(current_bonuses.get('advance', base_advance)), step=1.0, key="b_advance")
+                        advance = st.number_input("Advance", value=float(current_bonuses.get('advance', base_advance)), step=1.0, key=f"b_advance_{ke}")
                     
                     total_bonus = daily_sales_bonus + first_last_hour + social_media + management + management_consistency + transport_fuel + personal_sales + extra_bonus + daily_allowance
                     st.markdown("---")
