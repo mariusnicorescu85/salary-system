@@ -3477,6 +3477,8 @@ Table Name: {repr(table_name)} (type: {type(table_name).__name__})
                                     tables_cfg_wvs_save = config_full.get("airtable_config_tables", {})
                                     table_name_wvs = shop_config_wvs.get("wage_vs_sales_table") or tables_cfg_wvs_save.get("wage_vs_sales") or shop_config_wvs.get("airtable_table_name", "")
                                     if table_name_wvs and st.button("Save wage vs sales to Airtable", key="wvs_save_import_btn"):
+                                        wage_vs_sales_table_name = shop_config_wvs.get("wage_vs_sales_table") or tables_cfg_wvs_save.get("wage_vs_sales") or ""
+                                        is_wage_vs_sales_table = bool(wage_vs_sales_table_name) and table_name_wvs == wage_vs_sales_table_name
                                         shop_display_wvs = shop_config_wvs.get("shop_display_name") or shop_config_wvs.get("name", "")
                                         airtable_records_wvs = []
                                         for r in detail_rows:
@@ -3484,7 +3486,6 @@ Table Name: {repr(table_name)} (type: {type(table_name).__name__})
                                             wage_pct_val = round(pct, 2) if pct is not None and pct == pct else None  # exclude NaN
                                             rec = {
                                                 "RecordType": "Daily",
-                                                "Shop": shop_display_wvs,
                                                 "Employee": r["Employee"],
                                                 "Date": r["Date"],
                                                 "Hours": r["Hours"],
@@ -3495,7 +3496,9 @@ Table Name: {repr(table_name)} (type: {type(table_name).__name__})
                                                 "Commission": r.get("_commission_raw", 0),
                                                 "PaymentType": r.get("_payment_type_raw", ""),
                                             }
-                                            if wage_pct_val is not None:
+                                            if is_wage_vs_sales_table:
+                                                rec["Shop"] = shop_display_wvs
+                                            if wage_pct_val is not None and is_wage_vs_sales_table:
                                                 rec["Wage %"] = wage_pct_val
                                             airtable_records_wvs.append(rec)
                                         try:
@@ -3684,6 +3687,8 @@ Table Name: {repr(table_name)} (type: {type(table_name).__name__})
                         tables_cfg_wvs_manual = config_full_manual.get("airtable_config_tables", {})
                         table_name_wvs_manual = shop_config_wvs_manual.get("wage_vs_sales_table") or tables_cfg_wvs_manual.get("wage_vs_sales") or shop_config_wvs_manual.get("airtable_table_name", "")
                         if table_name_wvs_manual and st.button("Save wage vs sales to Airtable", key="wvs_save_manual_btn"):
+                            wage_vs_sales_table_name_manual = shop_config_wvs_manual.get("wage_vs_sales_table") or tables_cfg_wvs_manual.get("wage_vs_sales") or ""
+                            is_wage_vs_sales_table_manual = bool(wage_vs_sales_table_name_manual) and table_name_wvs_manual == wage_vs_sales_table_name_manual
                             shop_display_wvs_manual = shop_config_wvs_manual.get("shop_display_name") or shop_config_wvs_manual.get("name", "")
                             airtable_records_wvs_manual = []
                             for r in manual_detail_rows:
@@ -3691,7 +3696,6 @@ Table Name: {repr(table_name)} (type: {type(table_name).__name__})
                                 wage_pct_val = round(pct, 2) if pct is not None and pct == pct else None  # exclude NaN
                                 rec = {
                                     "RecordType": "Daily",
-                                    "Shop": shop_display_wvs_manual,
                                     "Employee": r["Employee"],
                                     "Date": r["Date"],
                                     "Hours": r["Hours"],
@@ -3702,7 +3706,9 @@ Table Name: {repr(table_name)} (type: {type(table_name).__name__})
                                     "Commission": r.get("_commission_raw", 0),
                                     "PaymentType": r.get("_payment_type_raw", ""),
                                 }
-                                if wage_pct_val is not None:
+                                if is_wage_vs_sales_table_manual:
+                                    rec["Shop"] = shop_display_wvs_manual
+                                if wage_pct_val is not None and is_wage_vs_sales_table_manual:
                                     rec["Wage %"] = wage_pct_val
                                 airtable_records_wvs_manual.append(rec)
                             try:
