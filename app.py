@@ -3478,13 +3478,23 @@ Table Name: {repr(table_name)} (type: {type(table_name).__name__})
                                         wage_vs_sales_table_name = shop_config_wvs.get("wage_vs_sales_table") or tables_cfg_wvs_save.get("wage_vs_sales") or ""
                                         is_wage_vs_sales_table = bool(wage_vs_sales_table_name) and table_name_wvs == wage_vs_sales_table_name
                                         shop_display_wvs = shop_config_wvs.get("shop_display_name") or shop_config_wvs.get("name", "")
+                                        # Resolve employee names to record IDs if Wage vs Sales has linked record fields
+                                        emp_name_to_id = {}
+                                        if is_wage_vs_sales_table and base_id_wvs and api_key_wvs:
+                                            try:
+                                                at_resolve = AirtableClient(api_key=api_key_wvs)
+                                                emp_table = tables_cfg_wvs_save.get("employees", "Employees")
+                                                emp_recs = at_resolve.get_employee_records_with_ids(base_id_wvs, emp_table, shop_display_name=shop_display_wvs, active_only=False)
+                                                emp_name_to_id = {str(r.get("Name", "")).strip(): r["id"] for r in emp_recs if r.get("Name")}
+                                            except Exception:
+                                                pass
                                         airtable_records_wvs = []
                                         for r in detail_rows:
                                             pct = r.get("_wage_pct_raw")
                                             wage_pct_val = round(pct, 2) if pct is not None and pct == pct else None  # exclude NaN
+                                            emp_name = r["Employee"]
                                             rec = {
                                                 "RecordType": "Daily",
-                                                "Employee": r["Employee"],
                                                 "Date": r["Date"],
                                                 "Hours": r["Hours"],
                                                 "Sales": r.get("_sales_only_raw", 0),
@@ -3496,6 +3506,14 @@ Table Name: {repr(table_name)} (type: {type(table_name).__name__})
                                             }
                                             if is_wage_vs_sales_table:
                                                 rec["Shop"] = shop_display_wvs
+                                                emp_link_field = tables_cfg_wvs_save.get("wage_vs_sales_employee_link_field") or shop_config_wvs.get("wage_vs_sales_employee_link_field") or "Employee"
+                                                emp_id = emp_name_to_id.get(emp_name) or emp_name_to_id.get(emp_name.strip())
+                                                if emp_id:
+                                                    rec[emp_link_field] = [emp_id]
+                                                else:
+                                                    rec[emp_link_field] = emp_name
+                                            else:
+                                                rec["Employee"] = emp_name
                                             if wage_pct_val is not None and is_wage_vs_sales_table:
                                                 rec["Wage %"] = wage_pct_val
                                             airtable_records_wvs.append(rec)
@@ -3696,13 +3714,22 @@ Table Name: {repr(table_name)} (type: {type(table_name).__name__})
                             wage_vs_sales_table_name_manual = shop_config_wvs_manual.get("wage_vs_sales_table") or tables_cfg_wvs_manual.get("wage_vs_sales") or ""
                             is_wage_vs_sales_table_manual = bool(wage_vs_sales_table_name_manual) and table_name_wvs_manual == wage_vs_sales_table_name_manual
                             shop_display_wvs_manual = shop_config_wvs_manual.get("shop_display_name") or shop_config_wvs_manual.get("name", "")
+                            emp_name_to_id_manual = {}
+                            if is_wage_vs_sales_table_manual and base_id_wvs and api_key_wvs:
+                                try:
+                                    at_resolve_manual = AirtableClient(api_key=api_key_wvs)
+                                    emp_table_manual = tables_cfg_wvs_manual.get("employees", "Employees")
+                                    emp_recs_manual = at_resolve_manual.get_employee_records_with_ids(base_id_wvs, emp_table_manual, shop_display_name=shop_display_wvs_manual, active_only=False)
+                                    emp_name_to_id_manual = {str(r.get("Name", "")).strip(): r["id"] for r in emp_recs_manual if r.get("Name")}
+                                except Exception:
+                                    pass
                             airtable_records_wvs_manual = []
                             for r in manual_detail_rows:
                                 pct = r.get("_wage_pct_raw")
                                 wage_pct_val = round(pct, 2) if pct is not None and pct == pct else None  # exclude NaN
+                                emp_name = r["Employee"]
                                 rec = {
                                     "RecordType": "Daily",
-                                    "Employee": r["Employee"],
                                     "Date": r["Date"],
                                     "Hours": r["Hours"],
                                     "Sales": r.get("_sales_only_raw", 0),
@@ -3714,6 +3741,14 @@ Table Name: {repr(table_name)} (type: {type(table_name).__name__})
                                 }
                                 if is_wage_vs_sales_table_manual:
                                     rec["Shop"] = shop_display_wvs_manual
+                                    emp_link_field_manual = tables_cfg_wvs_manual.get("wage_vs_sales_employee_link_field") or shop_config_wvs_manual.get("wage_vs_sales_employee_link_field") or "Employee"
+                                    emp_id = emp_name_to_id_manual.get(emp_name) or emp_name_to_id_manual.get(emp_name.strip())
+                                    if emp_id:
+                                        rec[emp_link_field_manual] = [emp_id]
+                                    else:
+                                        rec[emp_link_field_manual] = emp_name
+                                else:
+                                    rec["Employee"] = emp_name
                                 if wage_pct_val is not None and is_wage_vs_sales_table_manual:
                                     rec["Wage %"] = wage_pct_val
                                 airtable_records_wvs_manual.append(rec)
