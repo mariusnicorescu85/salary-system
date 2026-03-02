@@ -640,12 +640,16 @@ def load_monthly_bonuses(shop_key: str, year: int, month: int, shop_filter_overr
         return {}
 
 
-def save_monthly_bonuses(shop_key: str, year: int, month: int, bonuses: Dict, shop_filter_override: Optional[str] = None):
-    """Save monthly bonuses to Airtable (Monthly Bonuses table)."""
+def save_monthly_bonuses(shop_key: str, year: int, month: int, bonuses: Dict, shop_filter_override: Optional[str] = None) -> tuple[bool, Optional[str]]:
+    """
+    Save monthly bonuses to Airtable (Monthly Bonuses table).
+    Returns (success: bool, error_message: Optional[str]).
+    """
     base_id, api_key, _ = _get_airtable_credentials(shop_key)
     if not base_id or not api_key:
-        logger.warning("Cannot save monthly bonuses: missing Airtable credentials")
-        return
+        msg = "Cannot save to Airtable: missing credentials. Add [airtable] api_key to .streamlit/secrets.toml or set AIRTABLE_API_KEY."
+        logger.warning("Cannot save monthly bonuses: %s", msg)
+        return False, msg
     config = load_config()
     shop_config = (config or {}).get("shops", {}).get(shop_key, {})
     shop_display = shop_filter_override or shop_config.get("shop_display_name") or shop_config.get("name", shop_key)
@@ -661,8 +665,11 @@ def save_monthly_bonuses(shop_key: str, year: int, month: int, bonuses: Dict, sh
             employee_name_to_id=name_to_id,
             shop_display_name=shop_display,
         )
+        return True, None
     except Exception as e:
-        logger.warning("Airtable save_monthly_bonuses failed: %s", e)
+        msg = str(e)
+        logger.warning("Airtable save_monthly_bonuses failed: %s", msg)
+        return False, msg
 
 
 def load_shop_targets() -> Dict:
@@ -1627,6 +1634,11 @@ def main():
             st.subheader(f"Monthly Bonuses for {month_name}")
             st.caption("These bonuses are added to calculations when you run salary calculations.")
             
+            # Check Airtable credentials
+            base_id, api_key, _ = _get_airtable_credentials(selected_shop)
+            if not base_id or not api_key:
+                st.warning("⚠️ Airtable not configured. Add `[airtable] api_key = \"...\"` to `.streamlit/secrets.toml` (or set AIRTABLE_API_KEY) to save bonuses to Airtable.")
+            
             # Load existing monthly bonuses
             month_bonuses_data = load_monthly_bonuses(selected_shop, selected_year, selected_month, shop_filter_override=shop_display_adj)
             
@@ -1692,10 +1704,13 @@ def main():
                             'dailyAllowance': daily_allowance, 'manualHours': manual_hours,
                             'deductions': deductions, 'rent': rent, 'advance': advance
                         }
-                        save_monthly_bonuses(selected_shop, selected_year, selected_month, month_bonuses_data, shop_filter_override=shop_display_adj)
-                        st.success(f"✅ Saved bonuses for {selected_employee_bonus} - {month_name}")
-                        st.cache_data.clear()
-                        st.rerun()
+                        ok, err = save_monthly_bonuses(selected_shop, selected_year, selected_month, month_bonuses_data, shop_filter_override=shop_display_adj)
+                        if ok:
+                            st.success(f"✅ Saved bonuses for {selected_employee_bonus} - {month_name}")
+                            st.cache_data.clear()
+                            st.rerun()
+                        else:
+                            st.error(f"❌ Failed to save to Airtable: {err}")
             
             if month_bonuses_data:
                 st.markdown("---")
