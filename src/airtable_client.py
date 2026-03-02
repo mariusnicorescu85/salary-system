@@ -131,8 +131,9 @@ class AirtableClient:
         daily_records = [r for r in records if r.get('RecordType') == 'Daily']
         summary_records = [r for r in records if r.get('RecordType') == 'Monthly Summary']
         
-        # Check daily records (by Employee + Date)
+        # Check daily records (by Employee + Date, or Shop + Employee + Date when Shop is present)
         if daily_records:
+            use_shop = any(r.get('Shop') or r.get('shop') for r in daily_records)
             dates = [_normalize_date_for_key(r.get('Date') or r.get('date')) for r in daily_records]
             dates = [d for d in dates if d]
             if dates:
@@ -151,12 +152,16 @@ class AirtableClient:
                         date_val = fields.get('Date') or fields.get('date')
                         date_str = _normalize_date_for_key(date_val)
                         if emp and date_str and min_date <= date_str <= max_date:
-                            existing_keys.add((emp, date_str))
+                            shop = (fields.get('Shop') or fields.get('shop') or '').strip() if use_shop else ''
+                            key = (shop, emp, date_str) if use_shop else (emp, date_str)
+                            existing_keys.add(key)
                     
                     for record in daily_records:
                         emp = (record.get('Employee') or record.get('employee') or '').strip()
                         date_str = _normalize_date_for_key(record.get('Date') or record.get('date'))
-                        if emp and date_str and (emp, date_str) in existing_keys:
+                        shop = (record.get('Shop') or record.get('shop') or '').strip() if use_shop else ''
+                        key = (shop, emp, date_str) if use_shop else (emp, date_str)
+                        if emp and date_str and key in existing_keys:
                             existing_records.append(record)
                         else:
                             new_records.append(record)

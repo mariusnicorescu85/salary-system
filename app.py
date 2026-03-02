@@ -3472,13 +3472,19 @@ Table Name: {repr(table_name)} (type: {type(table_name).__name__})
                                 if detail_rows and base_id_wvs and api_key_wvs:
                                     st.markdown("---")
                                     st.subheader("Save to Airtable")
-                                    shop_config_wvs = (load_config() or {}).get("shops", {}).get(shop_key_wvs, {})
-                                    table_name_wvs = shop_config_wvs.get("airtable_table_name", "")
+                                    config_full = load_config() or {}
+                                    shop_config_wvs = config_full.get("shops", {}).get(shop_key_wvs, {})
+                                    tables_cfg_wvs_save = config_full.get("airtable_config_tables", {})
+                                    table_name_wvs = shop_config_wvs.get("wage_vs_sales_table") or tables_cfg_wvs_save.get("wage_vs_sales") or shop_config_wvs.get("airtable_table_name", "")
                                     if table_name_wvs and st.button("Save wage vs sales to Airtable", key="wvs_save_import_btn"):
+                                        shop_display_wvs = shop_config_wvs.get("shop_display_name") or shop_config_wvs.get("name", "")
                                         airtable_records_wvs = []
                                         for r in detail_rows:
-                                            airtable_records_wvs.append({
+                                            pct = r.get("_wage_pct_raw")
+                                            wage_pct_val = round(pct, 2) if pct is not None and pct == pct else None  # exclude NaN
+                                            rec = {
                                                 "RecordType": "Daily",
+                                                "Shop": shop_display_wvs,
                                                 "Employee": r["Employee"],
                                                 "Date": r["Date"],
                                                 "Hours": r["Hours"],
@@ -3488,7 +3494,10 @@ Table Name: {repr(table_name)} (type: {type(table_name).__name__})
                                                 "Base": r.get("_base_raw", 0),
                                                 "Commission": r.get("_commission_raw", 0),
                                                 "PaymentType": r.get("_payment_type_raw", ""),
-                                            })
+                                            }
+                                            if wage_pct_val is not None:
+                                                rec["Wage %"] = wage_pct_val
+                                            airtable_records_wvs.append(rec)
                                         try:
                                             with st.spinner("Saving to Airtable..."):
                                                 at_client_save = AirtableClient(api_key=api_key_wvs)
@@ -3507,7 +3516,7 @@ Table Name: {repr(table_name)} (type: {type(table_name).__name__})
                                                 import traceback
                                                 st.code(traceback.format_exc())
                                     elif not table_name_wvs:
-                                        st.caption("Configure airtable_table_name in config/shops.yaml to save.")
+                                        st.caption("Configure wage_vs_sales in config/shops.yaml (airtable_config_tables) or airtable_table_name to save.")
                     else:
                         st.info("Upload a report file above, or pick one from the sidebar (Saved Reports / Google Drive).")
 
@@ -3670,13 +3679,19 @@ Table Name: {repr(table_name)} (type: {type(table_name).__name__})
                     if manual_detail_rows and base_id_wvs and api_key_wvs:
                         st.markdown("---")
                         st.subheader("Save to Airtable")
-                        shop_config_wvs_manual = (load_config() or {}).get("shops", {}).get(shop_key_wvs, {})
-                        table_name_wvs_manual = shop_config_wvs_manual.get("airtable_table_name", "")
+                        config_full_manual = load_config() or {}
+                        shop_config_wvs_manual = config_full_manual.get("shops", {}).get(shop_key_wvs, {})
+                        tables_cfg_wvs_manual = config_full_manual.get("airtable_config_tables", {})
+                        table_name_wvs_manual = shop_config_wvs_manual.get("wage_vs_sales_table") or tables_cfg_wvs_manual.get("wage_vs_sales") or shop_config_wvs_manual.get("airtable_table_name", "")
                         if table_name_wvs_manual and st.button("Save wage vs sales to Airtable", key="wvs_save_manual_btn"):
+                            shop_display_wvs_manual = shop_config_wvs_manual.get("shop_display_name") or shop_config_wvs_manual.get("name", "")
                             airtable_records_wvs_manual = []
                             for r in manual_detail_rows:
-                                airtable_records_wvs_manual.append({
+                                pct = r.get("_wage_pct_raw")
+                                wage_pct_val = round(pct, 2) if pct is not None and pct == pct else None  # exclude NaN
+                                rec = {
                                     "RecordType": "Daily",
+                                    "Shop": shop_display_wvs_manual,
                                     "Employee": r["Employee"],
                                     "Date": r["Date"],
                                     "Hours": r["Hours"],
@@ -3686,7 +3701,10 @@ Table Name: {repr(table_name)} (type: {type(table_name).__name__})
                                     "Base": r.get("_base_raw", 0),
                                     "Commission": r.get("_commission_raw", 0),
                                     "PaymentType": r.get("_payment_type_raw", ""),
-                                })
+                                }
+                                if wage_pct_val is not None:
+                                    rec["Wage %"] = wage_pct_val
+                                airtable_records_wvs_manual.append(rec)
                             try:
                                 with st.spinner("Saving to Airtable..."):
                                     at_client_save_manual = AirtableClient(api_key=api_key_wvs)
@@ -3705,7 +3723,7 @@ Table Name: {repr(table_name)} (type: {type(table_name).__name__})
                                     import traceback
                                     st.code(traceback.format_exc())
                         elif not table_name_wvs_manual:
-                            st.caption("Configure airtable_table_name in config/shops.yaml to save.")
+                            st.caption("Configure wage_vs_sales in config/shops.yaml (airtable_config_tables) or airtable_table_name to save.")
 
     with tab6:
         st.header("📋 Data Management")

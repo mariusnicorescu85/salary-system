@@ -9,6 +9,7 @@ airtable_config_tables:
   daily_targets: "Daily Targets"
   uk_wage_bracket: "UK Wage Bracket"
   shop_analytics: "Shop Analytics"
+  wage_vs_sales: "Wage vs Sales"
 
 shops:
   pyt:
