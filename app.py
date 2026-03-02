@@ -3985,6 +3985,9 @@ Table Name: {repr(table_name)} (type: {type(table_name).__name__})
                 def _sales_percentage(emp_name: str, payment_type: str) -> str:
                     """Human-readable sales % from payment config (matches n8n workflow)."""
                     cfg = employees_config_analytics.get(emp_name, {})
+                    pt_norm = (payment_type or "").lower().replace(" ", "_")
+                    if pt_norm == "sales_only":
+                        return "0% (external pay)"
                     if payment_type == "commission_only" or payment_type == "CommissionOnly":
                         rate = cfg.get("commission_rate") or 0
                         return f"{rate * 100:.1f}%" if rate > 0 else "N/A"
@@ -4006,8 +4009,6 @@ Table Name: {repr(table_name)} (type: {type(table_name).__name__})
                         return "30-35% NET"
                     if payment_type in ("hourly_only", "manager", "HourlyOnly"):
                         return "Hourly"
-                    if payment_type in ("sales_only", "SalesOnly"):
-                        return "0% (external pay)"
                     return payment_type or "N/A"
 
                 def _pay_description(emp_name: str, payment_type: str) -> str:

@@ -192,6 +192,7 @@ class CalculationEngine:
             logger.debug(f"Available employees: {list(self.employee_config.keys())[:10]}...")
         
         payment_type = employee.get('payment_type', 'hourly_only')
+        payment_type = (payment_type or "").lower().replace(" ", "_") if isinstance(payment_type, str) else payment_type
         hourly_rate = self._resolve_hourly_rate(employee, date)
         
         total_sales = sales + addl_sales
@@ -339,6 +340,7 @@ class CalculationEngine:
         employee = self.employee_config.get(employee_name, {})
         bonus_info = self.bonus_config.get(employee_name, {})
         payment_type = employee.get('payment_type', 'hourly_only')
+        payment_type = (payment_type or "").lower().replace(" ", "_") if isinstance(payment_type, str) else payment_type
         first_date = daily_records[0].get('Date', '')
         advance = employee.get('advance', 0)
         
