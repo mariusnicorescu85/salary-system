@@ -391,18 +391,16 @@ def _load_gdrive_report(file_id: str, filename: str):
         return None
 
 
-@st.cache_data
+@st.cache_data(ttl=60)
 def load_config():
     """Load shop configuration"""
-    config_path = Path('config/shops.yaml')
-    if not config_path.exists():
-        st.error("Configuration file not found. Please create config/shops.yaml")
-        return None
-    
-    with open(config_path, 'r') as f:
-        config = yaml.safe_load(f)
-        # Debug: log config to help diagnose caching issues
-        return config
+    base = Path(__file__).resolve().parent
+    for config_path in [base / 'config' / 'shops.yaml', Path('config/shops.yaml')]:
+        if config_path.exists():
+            with open(config_path, 'r') as f:
+                return yaml.safe_load(f)
+    st.error("Configuration file not found. Please create config/shops.yaml")
+    return None
 
 
 def _get_airtable_credentials(shop_key: str = None):
@@ -3520,6 +3518,13 @@ Table Name: {repr(table_name)} (type: {type(table_name).__name__})
                                                 st.code(traceback.format_exc())
                                     elif not table_name_wvs:
                                         st.caption("Configure wage_vs_sales_table per shop or wage_vs_sales in airtable_config_tables (config/shops.yaml) to save.")
+                                        with st.expander("Debug: config values"):
+                                            st.code(f"shop_key: {shop_key_wvs}")
+                                            st.code(f"wage_vs_sales_table (shop): {shop_config_wvs.get('wage_vs_sales_table')}")
+                                            st.code(f"wage_vs_sales (tables): {tables_cfg_wvs_save.get('wage_vs_sales')}")
+                                        if st.button("🔄 Clear cache & reload", key="wvs_clear_cache_import"):
+                                            st.cache_data.clear()
+                                            st.rerun()
                     else:
                         st.info("Upload a report file above, or pick one from the sidebar (Saved Reports / Google Drive).")
 
@@ -3730,6 +3735,13 @@ Table Name: {repr(table_name)} (type: {type(table_name).__name__})
                                     st.code(traceback.format_exc())
                         elif not table_name_wvs_manual:
                             st.caption("Configure wage_vs_sales_table per shop or wage_vs_sales in airtable_config_tables (config/shops.yaml) to save.")
+                            with st.expander("Debug: config values"):
+                                st.code(f"shop_key: {shop_key_wvs}")
+                                st.code(f"wage_vs_sales_table (shop): {shop_config_wvs_manual.get('wage_vs_sales_table')}")
+                                st.code(f"wage_vs_sales (tables): {tables_cfg_wvs_manual.get('wage_vs_sales')}")
+                            if st.button("🔄 Clear cache & reload", key="wvs_clear_cache_manual"):
+                                st.cache_data.clear()
+                                st.rerun()
 
     with tab6:
         st.header("📋 Data Management")
