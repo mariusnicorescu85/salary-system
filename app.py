@@ -625,6 +625,88 @@ def _format_date_for_chart(date_val) -> str:
         return str(date_val)[:10] if date_val else ""
 
 
+def _render_wage_vs_sales_charts(detail_rows: list, total_wages: float, total_sales: float, target_pct: float = 25.0):
+    """Render gauge chart (wage % vs target) and horizontal bar (employee comparison) for Wage vs Sales data."""
+    from collections import defaultdict
+    import plotly.graph_objects as go
+
+    wage_pct = (total_wages / total_sales * 100) if total_sales > 0 else 0.0
+
+    # Gauge chart
+    fig_gauge = go.Figure(go.Indicator(
+        mode="gauge+number",
+        value=wage_pct,
+        number={"suffix": "%"},
+        title={"text": "Wage % of Sales"},
+        gauge={
+            "axis": {"range": [0, 50], "tickwidth": 1},
+            "bar": {"color": "#1f77b4"},
+            "bgcolor": "white",
+            "borderwidth": 2,
+            "bordercolor": "gray",
+            "steps": [
+                {"range": [0, target_pct - 1], "color": "#90EE90"},
+                {"range": [target_pct - 1, target_pct + 1], "color": "#FFD700"},
+                {"range": [target_pct + 1, 50], "color": "#FFB6C1"},
+            ],
+            "threshold": {
+                "line": {"color": "red", "width": 3},
+                "thickness": 0.75,
+                "value": target_pct,
+            },
+        },
+    ))
+    fig_gauge.update_layout(
+        height=220,
+        margin=dict(l=20, r=20, t=50, b=20),
+        paper_bgcolor="rgba(0,0,0,0)",
+        font=dict(size=14),
+    )
+
+    # Horizontal bar: employee wage % comparison
+    by_emp = defaultdict(lambda: {"wages": 0.0, "sales": 0.0})
+    for r in detail_rows:
+        emp = r.get("Employee", "")
+        by_emp[emp]["wages"] += r.get("_wages_raw", 0)
+        by_emp[emp]["sales"] += r.get("_sales_raw", 0)
+    emp_data = []
+    for emp, data in by_emp.items():
+        pct = (data["wages"] / data["sales"] * 100) if data["sales"] > 0 else 0.0
+        emp_data.append({"Employee": emp, "Wage %": round(pct, 2), "Total Wages": data["wages"], "Total Sales": data["sales"]})
+    emp_data.sort(key=lambda x: x["Wage %"], reverse=True)
+
+    fig_bar = None
+    if emp_data:
+        fig_bar = go.Figure(go.Bar(
+            x=[d["Wage %"] for d in emp_data],
+            y=[d["Employee"] for d in emp_data],
+            orientation="h",
+            marker_color=["#90EE90" if d["Wage %"] < target_pct - 1 else "#FFD700" if d["Wage %"] <= target_pct + 1 else "#FFB6C1" for d in emp_data],
+            text=[f"{d['Wage %']:.1f}%" for d in emp_data],
+            textposition="outside",
+        ))
+        fig_bar.add_vline(x=target_pct, line_dash="dash", line_color="red", annotation_text="Target 25%")
+        fig_bar.update_layout(
+            title="Wage % by Employee",
+            xaxis_title="Wage %",
+            yaxis_title="",
+            height=200 + len(emp_data) * 28,
+            margin=dict(l=10, r=60),
+            showlegend=False,
+            xaxis=dict(range=[0, max((d["Wage %"] for d in emp_data), default=30) * 1.2]),
+            paper_bgcolor="rgba(0,0,0,0)",
+        )
+        fig_bar.update_yaxes(autorange="reversed")
+
+    # Side-by-side layout
+    col_gauge, col_bar = st.columns([1, 1])
+    with col_gauge:
+        st.plotly_chart(fig_gauge, use_container_width=True)
+    with col_bar:
+        if fig_bar is not None:
+            st.plotly_chart(fig_bar, use_container_width=True)
+
+
 def _parse_currency_input(raw) -> float:
     """Parse user input that may be a number or string like '5,000.00' or '5000'."""
     if raw is None:
@@ -3445,6 +3527,13 @@ Table Name: {repr(table_name)} (type: {type(table_name).__name__})
                                     st.error("🔴 **Over target** – wages are above 25% of sales.")
 
                             if detail_rows_load:
+                                st.markdown("#### Charts")
+                                _render_wage_vs_sales_charts(
+                                    detail_rows_load, total_wages_load, total_sales_load, target_pct
+                                )
+                                st.markdown("---")
+
+                            if detail_rows_load:
                                 by_employee_load = defaultdict(list)
                                 for r in detail_rows_load:
                                     by_employee_load[r["Employee"]].append(r)
@@ -3648,6 +3737,13 @@ Table Name: {repr(table_name)} (type: {type(table_name).__name__})
                                         st.info("🟡 **On target** – wages are around 25% of sales.")
                                     else:
                                         st.error("🔴 **Over target** – wages are above 25% of sales.")
+
+                                if detail_rows:
+                                    st.markdown("#### Charts")
+                                    _render_wage_vs_sales_charts(
+                                        detail_rows, total_wages_wvs, total_sales_wvs, target_pct
+                                    )
+                                    st.markdown("---")
 
                                 if detail_rows:
                                     by_employee = defaultdict(list)
@@ -3900,6 +3996,8 @@ Table Name: {repr(table_name)} (type: {type(table_name).__name__})
                                         "Employee": name,
                                         "Date": date_str_wvs,
                                         "Hours": hours,
+                                        "_sales_raw": sales,
+                                        "_wages_raw": day_wages,
                                         "_sales_only_raw": sales,
                                         "_addl_raw": 0.0,
                                         "_base_raw": base_pay,
@@ -3932,6 +4030,13 @@ Table Name: {repr(table_name)} (type: {type(table_name).__name__})
                             st.error("🔴 **Over target** – wages are above 25% of sales.")
                     else:
                         st.info("Enter hours and sales above to see the wage % and target indicator.")
+
+                    if manual_detail_rows:
+                        st.markdown("#### Charts")
+                        _render_wage_vs_sales_charts(
+                            manual_detail_rows, total_wages_wvs, total_sales_wvs, target_pct
+                        )
+                        st.markdown("---")
 
                     # Save to Airtable (manual entry path)
                     if manual_detail_rows and base_id_wvs and api_key_wvs:
