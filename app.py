@@ -3280,13 +3280,202 @@ Table Name: {repr(table_name)} (type: {type(table_name).__name__})
             else:
                 wvs_data_source = st.radio(
                     "Data source",
-                    options=["Import from report", "Manual entry"],
+                    options=["Load from Airtable", "Import from report", "Manual entry"],
                     key="wvs_data_source",
                     horizontal=True,
-                    help="Import from a report file (e.g. report_pyt.csv) or enter hours and sales manually.",
+                    help="Load existing data from Airtable, import from a report file, or enter hours and sales manually.",
                 )
 
-                if wvs_data_source == "Import from report":
+                if wvs_data_source == "Load from Airtable":
+                    # --- Load from Airtable path ---
+                    from collections import defaultdict
+                    base_id_wvs_load, api_key_wvs_load, _ = _get_airtable_credentials(shop_key_wvs)
+                    config_load = load_config() or {}
+                    shop_config_load = config_load.get("shops", {}).get(shop_key_wvs, {})
+                    tables_cfg_load = config_load.get("airtable_config_tables", {})
+                    table_name_wvs_load = shop_config_load.get("wage_vs_sales_table") or tables_cfg_load.get("wage_vs_sales") or ""
+                    shop_display_load = shop_config_load.get("shop_display_name") or shop_config_load.get("name", "")
+
+                    if not base_id_wvs_load or not api_key_wvs_load or not table_name_wvs_load:
+                        st.warning("Airtable base ID, API key, and wage_vs_sales_table must be configured for this shop.")
+                    else:
+                        col_from, col_to = st.columns(2)
+                        with col_from:
+                            wvs_load_from = st.date_input(
+                                "From date",
+                                value=datetime.today().date() - timedelta(days=30),
+                                key="wvs_load_from",
+                                help="Start of date range (inclusive).",
+                            )
+                        with col_to:
+                            wvs_load_to = st.date_input(
+                                "To date",
+                                value=datetime.today().date(),
+                                key="wvs_load_to",
+                                help="End of date range (inclusive).",
+                            )
+                        if st.button("Load from Airtable", key="wvs_load_btn"):
+                            try:
+                                with st.spinner("Loading from Airtable..."):
+                                    at_client_load = AirtableClient(api_key=api_key_wvs_load)
+                                    date_from_str = wvs_load_from.strftime("%Y-%m-%d")
+                                    date_to_str = wvs_load_to.strftime("%Y-%m-%d")
+                                    raw_records = at_client_load.get_wage_vs_sales(
+                                        base_id_wvs_load, table_name_wvs_load,
+                                        shop=shop_display_load,
+                                        date_from=date_from_str,
+                                        date_to=date_to_str,
+                                    )
+                                    emp_table_load = tables_cfg_load.get("employees", "Employees")
+                                    emp_recs_load = at_client_load.get_employee_records_with_ids(
+                                        base_id_wvs_load, emp_table_load,
+                                        shop_display_name=shop_display_load,
+                                        active_only=False,
+                                    )
+                                    id_to_name_load = {r["id"]: str(r.get("Name", "")).strip() for r in emp_recs_load if r.get("Name")}
+
+                                    def _safe_float(val):
+                                        if val is None or val == "":
+                                            return 0.0
+                                        try:
+                                            return float(val)
+                                        except (ValueError, TypeError):
+                                            return 0.0
+
+                                    def _emp_from_record(r):
+                                        emp_val = r.get("Employee") or r.get("employee")
+                                        if isinstance(emp_val, list) and emp_val:
+                                            return id_to_name_load.get(emp_val[0], emp_val[0]) or ""
+                                        return str(emp_val or "").strip()
+
+                                    def _date_from_record(r):
+                                        d = r.get("Date") or r.get("date")
+                                        if hasattr(d, "strftime"):
+                                            return d.strftime("%Y-%m-%d")
+                                        s = str(d or "")[:10]
+                                        return s if s else ""
+
+                                    detail_rows_load = []
+                                    total_wages_load = 0.0
+                                    total_sales_load = 0.0
+                                    for rec in raw_records:
+                                        emp_name = _emp_from_record(rec) or "Unknown"
+                                        date_str = _date_from_record(rec)
+                                        if not date_str:
+                                            continue
+                                        hours = _safe_float(rec.get("Hours") or rec.get("hours"))
+                                        sales = _safe_float(rec.get("Sales") or rec.get("sales"))
+                                        addl = _safe_float(rec.get("Add'l Sales") or rec.get("AddlSales") or rec.get("addl_sales"))
+                                        total_sales_val = _safe_float(rec.get("Total Sales") or rec.get("total_sales")) or (sales + addl)
+                                        base_val = _safe_float(rec.get("Base") or rec.get("base"))
+                                        commission_val = _safe_float(rec.get("Commission") or rec.get("commission"))
+                                        total_wages_val = _safe_float(rec.get("Total Wages") or rec.get("total_wages")) or (base_val + commission_val)
+                                        wage_pct_val = rec.get("Wage %") or rec.get("wage_pct")
+                                        if wage_pct_val is not None:
+                                            try:
+                                                wage_pct_val = float(wage_pct_val)
+                                            except (ValueError, TypeError):
+                                                wage_pct_val = (total_wages_val / total_sales_val * 100) if total_sales_val > 0 else None
+                                        else:
+                                            wage_pct_val = (total_wages_val / total_sales_val * 100) if total_sales_val > 0 else None
+
+                                        total_wages_load += total_wages_val
+                                        total_sales_load += total_sales_val
+                                        detail_rows_load.append({
+                                            "Employee": emp_name,
+                                            "Date": date_str,
+                                            "Hours": hours,
+                                            "Sales": format_currency(sales),
+                                            "Add'l Sales": format_currency(addl),
+                                            "Total Sales": format_currency(total_sales_val),
+                                            "Base": format_currency(base_val),
+                                            "Commission": format_currency(commission_val),
+                                            "Total Wages": format_currency(total_wages_val),
+                                            "Wage %": "N/A" if wage_pct_val is None else f"{wage_pct_val:.2f}%",
+                                            "_sales_raw": total_sales_val,
+                                            "_wages_raw": total_wages_val,
+                                            "_wage_pct_raw": float("nan") if wage_pct_val is None else round(wage_pct_val, 2),
+                                            "_base_raw": base_val,
+                                            "_commission_raw": commission_val,
+                                            "_hrly_rate_raw": 0.0,
+                                            "_sales_only_raw": sales,
+                                            "_addl_raw": addl,
+                                            "_payment_type_raw": "",
+                                        })
+                                    st.session_state["wvs_loaded_detail_rows"] = detail_rows_load
+                                    st.session_state["wvs_loaded_totals"] = (total_wages_load, total_sales_load)
+                                    st.rerun()
+                            except Exception as e:
+                                st.error(f"Failed to load: {e}")
+                                with st.expander("Details"):
+                                    import traceback
+                                    st.code(traceback.format_exc())
+
+                        if "wvs_loaded_detail_rows" in st.session_state:
+                            detail_rows_load = st.session_state["wvs_loaded_detail_rows"]
+                            total_wages_load, total_sales_load = st.session_state["wvs_loaded_totals"]
+                            wage_pct_load = (total_wages_load / total_sales_load * 100) if total_sales_load > 0 else 0.0
+                            target_pct = 25.0
+                            st.success(f"Loaded {len(detail_rows_load)} records from Airtable")
+                            st.markdown("---")
+                            st.markdown("### Result")
+                            col_a, col_b, col_c = st.columns(3)
+                            with col_a:
+                                st.metric("Total wages", format_currency(total_wages_load))
+                            with col_b:
+                                st.metric("Total sales", format_currency(total_sales_load))
+                            with col_c:
+                                st.metric("Wage % of sales", f"{wage_pct_load:.2f}%")
+                            if total_sales_load > 0:
+                                if wage_pct_load < target_pct - 1:
+                                    st.success("🟢 **Under target** – wages are below 25% of sales.")
+                                elif wage_pct_load <= target_pct + 1:
+                                    st.info("🟡 **On target** – wages are around 25% of sales.")
+                                else:
+                                    st.error("🔴 **Over target** – wages are above 25% of sales.")
+
+                            if detail_rows_load:
+                                by_employee_load = defaultdict(list)
+                                for r in detail_rows_load:
+                                    by_employee_load[r["Employee"]].append(r)
+                                for emp_name in sorted(by_employee_load.keys()):
+                                    emp_rows = by_employee_load[emp_name]
+                                    emp_rows.sort(key=lambda x: x["Date"])
+                                    days_count = len(emp_rows)
+                                    emp_total_sales = sum(r["_sales_raw"] for r in emp_rows)
+                                    emp_total_wages = sum(r["_wages_raw"] for r in emp_rows)
+                                    emp_avg_pct_str = "N/A" if emp_total_sales <= 0 else f"{(emp_total_wages / emp_total_sales * 100):.2f}%"
+                                    with st.expander(f"**{emp_name}** — {days_count} days worked · Avg wage %: {emp_avg_pct_str}", expanded=True):
+                                        table_rows = [{k: v for k, v in r.items() if not k.startswith("_")} for r in emp_rows]
+                                        st.dataframe(
+                                            pd.DataFrame(table_rows),
+                                            use_container_width=True,
+                                            hide_index=True,
+                                        )
+                                        dates_fmt = [pd.to_datetime(r["Date"], dayfirst=True).strftime("%d %b") for r in emp_rows]
+                                        st.caption("Wage % over time (target: 25%)")
+                                        pct_df = pd.DataFrame(
+                                            {"Wage %": [r["_wage_pct_raw"] for r in emp_rows]},
+                                            index=dates_fmt,
+                                        )
+                                        st.line_chart(pct_df)
+                                        st.caption("Wages vs Sales per day (£)")
+                                        amounts_df = pd.DataFrame(
+                                            {
+                                                "Wages (£)": [r["_wages_raw"] for r in emp_rows],
+                                                "Sales (£)": [r["_sales_raw"] for r in emp_rows],
+                                            },
+                                            index=dates_fmt,
+                                        )
+                                        st.bar_chart(amounts_df)
+                            if st.button("Clear loaded data", key="wvs_clear_loaded"):
+                                del st.session_state["wvs_loaded_detail_rows"]
+                                del st.session_state["wvs_loaded_totals"]
+                                st.rerun()
+                        else:
+                            st.info("Select a date range and click **Load from Airtable** to view existing data.")
+
+                elif wvs_data_source == "Import from report":
                     # --- Import from report path ---
                     wvs_uploaded = st.file_uploader(
                         "Upload report (CSV)",
@@ -3468,7 +3657,7 @@ Table Name: {repr(table_name)} (type: {type(table_name).__name__})
                                                 use_container_width=True,
                                                 hide_index=True,
                                             )
-                                            dates_fmt = [pd.to_datetime(r["Date"]).strftime("%d %b") for r in emp_rows]
+                                            dates_fmt = [pd.to_datetime(r["Date"], dayfirst=True).strftime("%d %b") for r in emp_rows]
                                             st.caption("Wage % over time (target: 25%)")
                                             pct_df = pd.DataFrame(
                                                 {"Wage %": [r["_wage_pct_raw"] for r in emp_rows]},
@@ -4244,18 +4433,35 @@ Table Name: {repr(table_name)} (type: {type(table_name).__name__})
                 base_id, api_key_analytics, _ = _get_airtable_credentials(results_shop_key)
 
                 if base_id_analytics and api_key_analytics:
-                    if st.button("Save analytics to Airtable", key="save_analytics_btn"):
-                        try:
-                            at_client_analytics = AirtableClient(api_key=api_key_analytics)
-                            result = at_client_analytics.save_shop_analytics(
-                                base_id_analytics, analytics_table, analytics_rows
-                            )
-                            st.success(f"Saved {result.get('records_created', 0)} analytics records to Airtable.")
-                        except Exception as e:
-                            st.error(f"Failed to save: {e}")
-                            import traceback
-                            with st.expander("Details"):
-                                st.code(traceback.format_exc())
+                    save_col, update_col = st.columns(2)
+                    with save_col:
+                        if st.button("Save all (append new)", key="save_analytics_btn", help="Append all records to Airtable. Use for first-time save or when adding new employees."):
+                            try:
+                                at_client_analytics = AirtableClient(api_key=api_key_analytics)
+                                result = at_client_analytics.save_shop_analytics(
+                                    base_id_analytics, analytics_table, analytics_rows
+                                )
+                                st.success(f"Saved {result.get('records_created', 0)} analytics records to Airtable.")
+                            except Exception as e:
+                                st.error(f"Failed to save: {e}")
+                                import traceback
+                                with st.expander("Details"):
+                                    st.code(traceback.format_exc())
+                    with update_col:
+                        if st.button("Update existing", key="update_analytics_btn", help="Update records already in Airtable (e.g. after bonus adjustments). Creates new records only for employees not yet saved."):
+                            try:
+                                at_client_analytics = AirtableClient(api_key=api_key_analytics)
+                                result = at_client_analytics.upsert_shop_analytics(
+                                    base_id_analytics, analytics_table, analytics_rows,
+                                    shop=shop_display_analytics,
+                                    period=analytics_rows[0].get("Period", "") if analytics_rows else "",
+                                )
+                                st.success(result.get("message", f"Updated {result.get('records_updated', 0)}, created {result.get('records_created', 0)}."))
+                            except Exception as e:
+                                st.error(f"Failed to update: {e}")
+                                import traceback
+                                with st.expander("Details"):
+                                    st.code(traceback.format_exc())
                 else:
                     st.warning("Configure Airtable Base ID and API key for this shop to save analytics.")
 

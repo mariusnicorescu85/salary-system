@@ -1334,6 +1334,81 @@ class AirtableClient:
             return {"success": True, "records_created": 0}
         return self.append_records(base_id, table_name, records)
 
+    def upsert_shop_analytics(
+        self,
+        base_id: str,
+        table_name: str,
+        records: List[Dict[str, Any]],
+        shop: Optional[str] = None,
+        period: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Update existing shop analytics records in Airtable, create new ones if not found.
+        Uses (Employee, Shop, Period, PaymentType) as unique key.
+        shop, period: optional filters to limit which existing records to fetch (improves performance).
+        Returns dict with records_updated, records_created, success, message.
+        """
+        if not records:
+            return {"success": True, "records_updated": 0, "records_created": 0, "message": "No records to upsert."}
+
+        # Determine shop/period from records if not provided
+        shop_from_records = shop or (records[0].get("Shop") if records else "")
+        period_from_records = period or (records[0].get("Period") if records else "")
+
+        # Fetch existing records for this shop/period
+        existing = self.get_shop_analytics(base_id, table_name, shop=shop_from_records, period=period_from_records)
+        key_to_id = {}
+        for rec in existing:
+            rid = rec.get("id")
+            emp = rec.get("Employee") or rec.get("employee") or ""
+            s = rec.get("Shop") or rec.get("shop") or ""
+            p = str(rec.get("Period") or rec.get("period") or "")
+            pt = rec.get("PaymentType") or rec.get("payment_type") or ""
+            if rid and emp and s and p:
+                key_to_id[(emp, s, p, pt)] = rid
+
+        to_update = []
+        to_create = []
+        for r in records:
+            emp = (r.get("Employee") or r.get("employee") or "").strip()
+            s = (r.get("Shop") or r.get("shop") or "").strip()
+            p = str(r.get("Period") or r.get("period") or "").strip()
+            pt = (r.get("PaymentType") or r.get("payment_type") or "").strip()
+            key = (emp, s, p, pt)
+            fields = {k: v for k, v in r.items() if k not in ("id",)}
+            if key in key_to_id:
+                to_update.append({"id": key_to_id[key], "fields": fields})
+            else:
+                to_create.append(fields)
+
+        table = self.api.table(base_id, table_name)
+        updated_count = 0
+        created_count = 0
+
+        for i in range(0, len(to_update), 10):
+            batch = to_update[i : i + 10]
+            table.batch_update(batch)
+            updated_count += len(batch)
+
+        for i in range(0, len(to_create), 10):
+            batch = to_create[i : i + 10]
+            table.batch_create(batch)
+            created_count += len(batch)
+
+        msg_parts = []
+        if updated_count:
+            msg_parts.append(f"Updated {updated_count} records")
+        if created_count:
+            msg_parts.append(f"Created {created_count} new records")
+        message = ". ".join(msg_parts) if msg_parts else "No changes."
+
+        return {
+            "success": True,
+            "records_updated": updated_count,
+            "records_created": created_count,
+            "message": message,
+        }
+
     def get_shop_analytics(
         self,
         base_id: str,
@@ -1353,3 +1428,34 @@ class AirtableClient:
             formula_parts.append(f'{{Period}} = "{period}"')
         formula = "AND(" + ", ".join(formula_parts) + ")" if formula_parts else None
         return self.get_records_with_ids(base_id, table_name, formula=formula)
+
+    def get_wage_vs_sales(
+        self,
+        base_id: str,
+        table_name: str,
+        shop: Optional[str] = None,
+        date_from: Optional[str] = None,
+        date_to: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        Load Wage vs Sales records from Airtable.
+        shop: filter by Shop field (e.g. "Opatra", "PYT")
+        date_from, date_to: optional YYYY-MM-DD strings for date range filter (inclusive)
+        """
+        shop_esc = (shop or "").replace("\\", "\\\\").replace('"', '\\"')
+        formula = f'{{Shop}} = "{shop_esc}"' if shop_esc else None
+        records = self.get_records_with_ids(base_id, table_name, formula=formula)
+        if not records or (not date_from and not date_to):
+            return records
+        out = []
+        for r in records:
+            d = _normalize_date_for_key(r.get("Date") or r.get("date"))
+            if not d:
+                out.append(r)
+                continue
+            if date_from and d < date_from:
+                continue
+            if date_to and d > date_to:
+                continue
+            out.append(r)
+        return out
