@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 # Import our modules
 from src.calculation_engine import CalculationEngine
 from src.data_processor import DataProcessor
-from src.airtable_client import AirtableClient
+from src.airtable_client import AirtableClient, _normalize_date_for_key
 from src.email_client import EmailClient
 from src.google_drive_client import GoogleDriveClient
 
@@ -611,6 +611,18 @@ def _load_employee_config_from_airtable(
 def format_currency(value: float) -> str:
     """Format value as currency"""
     return f"£{value:,.2f}"
+
+
+def _format_date_for_chart(date_val) -> str:
+    """Normalize date to YYYY-MM-DD then format as 'DD Mon' for chart labels. Avoids month/day swap (e.g. 1/3 vs 3/1)."""
+    normalized = _normalize_date_for_key(date_val)
+    if not normalized:
+        return str(date_val)[:10] if date_val else ""
+    try:
+        dt = pd.to_datetime(normalized)
+        return dt.strftime("%d %b")
+    except Exception:
+        return str(date_val)[:10] if date_val else ""
 
 
 def _parse_currency_input(raw) -> float:
@@ -3350,10 +3362,8 @@ Table Name: {repr(table_name)} (type: {type(table_name).__name__})
 
                                     def _date_from_record(r):
                                         d = r.get("Date") or r.get("date")
-                                        if hasattr(d, "strftime"):
-                                            return d.strftime("%Y-%m-%d")
-                                        s = str(d or "")[:10]
-                                        return s if s else ""
+                                        normalized = _normalize_date_for_key(d)
+                                        return normalized or ""
 
                                     detail_rows_load = []
                                     total_wages_load = 0.0
@@ -3452,7 +3462,7 @@ Table Name: {repr(table_name)} (type: {type(table_name).__name__})
                                             use_container_width=True,
                                             hide_index=True,
                                         )
-                                        dates_fmt = [pd.to_datetime(r["Date"], dayfirst=True).strftime("%d %b") for r in emp_rows]
+                                        dates_fmt = [_format_date_for_chart(r["Date"]) for r in emp_rows]
                                         st.caption("Wage % over time (target: 25%)")
                                         pct_df = pd.DataFrame(
                                             {"Wage %": [r["_wage_pct_raw"] for r in emp_rows]},
@@ -3657,7 +3667,7 @@ Table Name: {repr(table_name)} (type: {type(table_name).__name__})
                                                 use_container_width=True,
                                                 hide_index=True,
                                             )
-                                            dates_fmt = [pd.to_datetime(r["Date"], dayfirst=True).strftime("%d %b") for r in emp_rows]
+                                            dates_fmt = [_format_date_for_chart(r["Date"]) for r in emp_rows]
                                             st.caption("Wage % over time (target: 25%)")
                                             pct_df = pd.DataFrame(
                                                 {"Wage %": [r["_wage_pct_raw"] for r in emp_rows]},
