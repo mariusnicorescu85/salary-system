@@ -995,6 +995,7 @@ def _render_employees_tab(client, base_id, tables_cfg, shop_display, shop_option
                 with n1:
                     na = st.text_input("Name", key="dm_emp_na")
                     em = st.text_input("Email", key="dm_emp_em")
+                    dob = st.date_input("Date of Birth", value=None, key="dm_emp_dob")
                     sh = st.selectbox("Shop", shop_options, key="dm_emp_sh")
                     pt = st.selectbox("Payment Type", payment_types, key="dm_emp_pt")
                     sts = st.selectbox("Employment Status", ["Active", "Inactive"], key="dm_emp_sts")
@@ -1006,6 +1007,7 @@ def _render_employees_tab(client, base_id, tables_cfg, shop_display, shop_option
                     if na and na.strip():
                         flds = {"Name": na.strip(), "Shop": sh, "Payment Type": pt, "Employment Status": sts}
                         if em.strip(): flds["Email"] = em.strip()
+                        if dob: flds["Date of Birth"] = dob.strftime("%Y-%m-%d")
                         if hr: flds["Hourly Rate Override"] = hr
                         if cr: flds["Commission Rate"] = cr
                         if dt: flds["Daily Transport"] = dt
