@@ -3070,13 +3070,16 @@ Table Name: {repr(table_name)} (type: {type(table_name).__name__})
                 existing_targets = existing.get("staff_daily_targets") or {}
                 existing_sales = existing.get("staff_daily_sales") or {}
 
-                staff_working = st.multiselect(
+                # Show ✓ for staff already saved for this date (same as Monthly Bonuses)
+                staff_options = [f"{name} ✓" if name in existing_staff else name for name in employee_names]
+                staff_working_raw = st.multiselect(
                     "Staff working this day",
-                    options=employee_names,
-                    default=existing_staff,
+                    options=staff_options,
+                    default=[opt for opt in staff_options if opt.replace(" ✓", "").strip() in existing_staff],
                     key="daily_rubric_staff",
-                    help="Select everyone who is working on this date. Individual target fields appear below.",
+                    help="Select everyone who is working on this date. ✓ = already saved for this day.",
                 )
+                staff_working = [opt.replace(" ✓", "").strip() for opt in staff_working_raw]
 
                 st.markdown("**Daily target & sales per staff (£)**")
                 with st.form("daily_target_rubric_form", clear_on_submit=False):
@@ -3098,12 +3101,12 @@ Table Name: {repr(table_name)} (type: {type(table_name).__name__})
                             with c2:
                                 staff_daily_sales[name] = st.number_input(
                                     "Actual sales (£)",
-                                    min_value=0.0,
+                                    min_value=None,
                                     step=50.0,
                                     value=float(existing_sales.get(name, 0)),
                                     format="%.2f",
                                     key=f"daily_sales_{date_str}_{name}",
-                                    help=f"Total sales achieved by {name} on this day.",
+                                    help=f"Total sales achieved by {name} on this day. Use negative values for refunds (e.g. -100).",
                                 )
                     submitted_rubric = st.form_submit_button("Save daily target")
 
@@ -3145,7 +3148,8 @@ Table Name: {repr(table_name)} (type: {type(table_name).__name__})
                                 st.success(f"**{name}:** Target {format_currency(target)} → Sales {format_currency(sales)} ({pct:+.1f}% above)")
                             else:
                                 st.warning(f"**{name}:** Target {format_currency(target)} → Sales {format_currency(sales)} ({pct:.1f}% below)")
-                        elif target > 0 or sales > 0:
+                        elif target > 0 or sales != 0:
+                            # Include refunds (sales < 0) and day-off staff with no target
                             st.info(f"**{name}:** Target {format_currency(target)} | Sales {format_currency(sales)}")
 
                 # Show today's manager-set daily targets (per staff and total)
