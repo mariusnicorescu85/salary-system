@@ -5008,9 +5008,21 @@ Table Name: {repr(table_name)} (type: {type(table_name).__name__})
                                 "Wage_%": round(wage_pct, 2),
                             })
                         daily_rows.sort(key=lambda x: (x["Week_Start"], x["Date"]))
-                        df_daily = pd.DataFrame(daily_rows)
+                        from collections import defaultdict
+                        by_week = defaultdict(list)
+                        for row in daily_rows:
+                            by_week[row["Week_Start"]].append(row)
                         with st.expander("📋 View data table", expanded=False):
-                            st.dataframe(df_daily, use_container_width=True, hide_index=True)
+                            for week_start in sorted(by_week.keys()):
+                                days = by_week[week_start]
+                                week_sales = sum(d["Total Sales"] for d in days)
+                                week_wages = sum(d["Wages"] for d in days)
+                                week_pct = (week_wages / week_sales * 100) if week_sales > 0 else 0
+                                week_label = f"Week of {week_start} — Sales: £{week_sales:,.2f} | Wages: £{week_wages:,.2f} | Wage %: {week_pct:.1f}%"
+                                with st.expander(week_label, expanded=False):
+                                    df_week = pd.DataFrame(days)
+                                    st.dataframe(df_week[["Date", "Hours", "Sales", "Add'l Sales", "Total Sales", "Wages", "Wage_%"]], use_container_width=True, hide_index=True)
+                        df_daily = pd.DataFrame(daily_rows)
                         csv_ev = df_daily.to_csv(index=False)
                         st.download_button(
                             "Download CSV",
