@@ -740,7 +740,13 @@ def _compute_employee_evolution(
             r.get("AddlSales", 0),
             date_str,
         )
-        wages = (payment.get("Base", 0) or 0) + (payment.get("Commission", 0) or 0)
+        base_pay = payment.get("Base", 0) or 0
+        commission_pay = payment.get("Commission", 0) or 0
+        pt = (payment.get("PaymentType") or "").lower()
+        if "hybrid" in pt or "monthlymax" in pt:
+            wages = max(base_pay, commission_pay)
+        else:
+            wages = base_pay + commission_pay
         out.append({**r, "_wages": wages})
 
     by_emp_week = defaultdict(lambda: {"sales": 0, "wages": 0, "hours": 0, "days": 0})
@@ -4994,9 +5000,21 @@ Table Name: {repr(table_name)} (type: {type(table_name).__name__})
                             payment = engine_ev.calculate_daily_payment(
                                 emp, r.get("Hours", 0), r.get("Sales", 0), r.get("AddlSales", 0), date_str
                             )
-                            wages = (payment.get("Base", 0) or 0) + (payment.get("Commission", 0) or 0)
+                            base_pay = payment.get("Base", 0) or 0
+                            commission_pay = payment.get("Commission", 0) or 0
+                            pt = (payment.get("PaymentType") or "").lower()
+                            if "hybrid" in pt or "monthlymax" in pt:
+                                wages = max(base_pay, commission_pay)
+                            else:
+                                wages = base_pay + commission_pay
                             sales = (r.get("Sales", 0) or 0) + (r.get("AddlSales", 0) or 0)
                             wage_pct = (wages / sales * 100) if sales > 0 else 0
+                            if base_pay > 0 and commission_pay > 0:
+                                paid_via = "Hours" if base_pay >= commission_pay else "Commission"
+                            elif base_pay > 0:
+                                paid_via = "Hours"
+                            else:
+                                paid_via = "Commission"
                             daily_rows.append({
                                 "Week_Start": week_start.strftime("%Y-%m-%d"),
                                 "Date": date_str,
@@ -5004,7 +5022,10 @@ Table Name: {repr(table_name)} (type: {type(table_name).__name__})
                                 "Sales": round(r.get("Sales", 0) or 0, 2),
                                 "Add'l Sales": round(r.get("AddlSales", 0) or 0, 2),
                                 "Total Sales": round(sales, 2),
+                                "Base (Hours)": round(base_pay, 2),
+                                "Commission": round(commission_pay, 2),
                                 "Wages": round(wages, 2),
+                                "Paid via": paid_via,
                                 "Wage_%": round(wage_pct, 2),
                             })
                         daily_rows.sort(key=lambda x: (x["Week_Start"], x["Date"]))
@@ -5018,10 +5039,14 @@ Table Name: {repr(table_name)} (type: {type(table_name).__name__})
                                 week_sales = sum(d["Total Sales"] for d in days)
                                 week_wages = sum(d["Wages"] for d in days)
                                 week_pct = (week_wages / week_sales * 100) if week_sales > 0 else 0
-                                week_label = f"Week of {week_start} — Sales: £{week_sales:,.2f} | Wages: £{week_wages:,.2f} | Wage %: {week_pct:.1f}%"
+                                hours_days = sum(1 for d in days if d.get("Paid via") == "Hours")
+                                comm_days = sum(1 for d in days if d.get("Paid via") == "Commission")
+                                pay_breakdown = f" | {hours_days}d Hours, {comm_days}d Commission" if (hours_days or comm_days) else ""
+                                week_label = f"Week of {week_start} — Sales: £{week_sales:,.2f} | Wages: £{week_wages:,.2f} | Wage %: {week_pct:.1f}%{pay_breakdown}"
                                 with st.expander(week_label, expanded=False):
                                     df_week = pd.DataFrame(days)
-                                    st.dataframe(df_week[["Date", "Hours", "Sales", "Add'l Sales", "Total Sales", "Wages", "Wage_%"]], use_container_width=True, hide_index=True)
+                                    cols = ["Date", "Hours", "Sales", "Add'l Sales", "Total Sales", "Base (Hours)", "Commission", "Paid via", "Wages", "Wage_%"]
+                                    st.dataframe(df_week[[c for c in cols if c in df_week.columns]], use_container_width=True, hide_index=True)
                         df_daily = pd.DataFrame(daily_rows)
                         csv_ev = df_daily.to_csv(index=False)
                         st.download_button(
