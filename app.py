@@ -4845,36 +4845,6 @@ Table Name: {repr(table_name)} (type: {type(table_name).__name__})
         )
         employee_filter_ev = None if selected_employee == "All employees" else selected_employee
 
-        with st.expander("🔍 Debug: Why wages might be 0", expanded=False):
-            st.caption("Wages load from Airtable when **report names match config names**. Common causes of £0:")
-            st.markdown("""
-            - **Name mismatch**: Report has `Naftali, Shahar` but Airtable Employees has `Shahar Naftali`. Add a **Name Mapping** row: Report Name = `Naftali, Shahar` → link to the Employee.
-            - **Wrong shop**: Ensure the sidebar shop matches where she's assigned (e.g. Opatra).
-            - **No rate**: Employee needs **Hourly Rate Override** or **Date of Birth** (for UK wage bracket).
-            """)
-            if ev_report_file and employees_ev:
-                try:
-                    if hasattr(ev_report_file, "seek"):
-                        ev_report_file.seek(0)
-                    raw = ev_report_file.read()
-                    content = raw.decode("utf-8") if isinstance(raw, bytes) else str(raw)
-                    df_dbg = pd.read_csv(io.StringIO(content), header=None)
-                    name_mapping_dbg = emp_config_full_ev.get("name_mapping", {}) or {}
-                    processor_dbg = DataProcessor(name_mapping=name_mapping_dbg)
-                    recs_dbg = processor_dbg.parse_csv(df_dbg)
-                    report_names = sorted(set(r.get("Employee", "") for r in recs_dbg if r.get("Employee")))
-                    config_names = list(employees_ev.keys())
-                    employees_lower = {n.lower(): n for n in config_names}
-                    st.write("**Report names** (after mapping): ", report_names)
-                    st.write("**Config names** (from Airtable): ", config_names)
-                    if name_mapping_dbg:
-                        st.write("**Name mappings**: ", name_mapping_dbg)
-                    unmatched = [rn for rn in report_names if rn.lower() not in employees_lower]
-                    if unmatched:
-                        st.warning(f"⚠️ No config match for: {unmatched}. Add Name Mappings or fix Employee names in Airtable.")
-                except Exception as e:
-                    st.caption(f"Could not run debug: {e}")
-
         if ev_report_file and st.button("Run evolution analysis", key="ev_run_btn"):
             try:
                 if hasattr(ev_report_file, "seek"):
@@ -4985,19 +4955,6 @@ Table Name: {repr(table_name)} (type: {type(table_name).__name__})
                                     height=300, margin=dict(l=40, r=20, t=40, b=40),
                                 )
                                 st.plotly_chart(fig_sales_wages, use_container_width=True)
-
-                            fig_profit = go.Figure()
-                            fig_profit.add_trace(go.Bar(
-                                x=weeks, y=[r["Profit"] for r in emp_rows],
-                                name="Profit", marker_color=["#22c55e" if r["Profit"] >= 0 else "#ef4444" for r in emp_rows],
-                            ))
-                            fig_profit.add_hline(y=0, line_dash="dash", line_color="gray")
-                            fig_profit.update_layout(
-                                title="Weekly Profit (Sales − Wages)",
-                                xaxis_title="Week", yaxis_title="£",
-                                height=300, margin=dict(l=40, r=40, t=40, b=40),
-                            )
-                            st.plotly_chart(fig_profit, use_container_width=True)
 
                             if not employee_filter_ev and len(set(r["Employee"] for r in emp_rows)) > 1:
                                 # All employees: add Wage % comparison bar chart
