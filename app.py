@@ -4977,10 +4977,41 @@ Table Name: {repr(table_name)} (type: {type(table_name).__name__})
                                 )
                                 st.plotly_chart(fig_bar, use_container_width=True)
 
-                        # --- Table (collapsible) ---
+                        # --- Table (collapsible): weekly breakdown by days worked ---
+                        daily_rows = []
+                        for r in records_ev:
+                            emp = r.get("Employee", "")
+                            if employee_filter_ev and employee_filter_ev.lower() not in emp.lower():
+                                continue
+                            date_str = r.get("Date")
+                            if not date_str:
+                                continue
+                            try:
+                                dt = datetime.strptime(date_str, "%Y-%m-%d")
+                            except ValueError:
+                                continue
+                            week_start = dt - timedelta(days=dt.weekday())
+                            payment = engine_ev.calculate_daily_payment(
+                                emp, r.get("Hours", 0), r.get("Sales", 0), r.get("AddlSales", 0), date_str
+                            )
+                            wages = (payment.get("Base", 0) or 0) + (payment.get("Commission", 0) or 0)
+                            sales = (r.get("Sales", 0) or 0) + (r.get("AddlSales", 0) or 0)
+                            wage_pct = (wages / sales * 100) if sales > 0 else 0
+                            daily_rows.append({
+                                "Week_Start": week_start.strftime("%Y-%m-%d"),
+                                "Date": date_str,
+                                "Hours": round(r.get("Hours", 0) or 0, 2),
+                                "Sales": round(r.get("Sales", 0) or 0, 2),
+                                "Add'l Sales": round(r.get("AddlSales", 0) or 0, 2),
+                                "Total Sales": round(sales, 2),
+                                "Wages": round(wages, 2),
+                                "Wage_%": round(wage_pct, 2),
+                            })
+                        daily_rows.sort(key=lambda x: (x["Week_Start"], x["Date"]))
+                        df_daily = pd.DataFrame(daily_rows)
                         with st.expander("📋 View data table", expanded=False):
-                            st.dataframe(df_evolution, use_container_width=True, hide_index=True)
-                        csv_ev = df_evolution.to_csv(index=False)
+                            st.dataframe(df_daily, use_container_width=True, hide_index=True)
+                        csv_ev = df_daily.to_csv(index=False)
                         st.download_button(
                             "Download CSV",
                             data=csv_ev,
