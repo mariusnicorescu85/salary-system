@@ -933,7 +933,12 @@ def _render_employees_tab(client, base_id, tables_cfg, shop_display, shop_option
             for col in editable_cols:
                 airtable_key = col_to_airtable.get(col, col)
                 val = r.get(airtable_key)
-                row[col] = "" if val is None else (", ".join(str(x) for x in val) if isinstance(val, list) else str(val).strip())
+                raw = "" if val is None else (", ".join(str(x) for x in val) if isinstance(val, list) else str(val).strip())
+                # Employment Status must be in SelectboxColumn options or edits won't save
+                if col == "Employment Status":
+                    row[col] = raw if raw in ("Active", "Inactive") else ("Inactive" if raw.lower() == "inactive" else "Active")
+                else:
+                    row[col] = raw
             rows.append(row)
         df = pd.DataFrame(rows)
         id_col, edit_df = df["_id"], df.drop(columns=["_id"])
@@ -952,20 +957,14 @@ def _render_employees_tab(client, base_id, tables_cfg, shop_display, shop_option
         }
         edited = st.data_editor(edit_df, column_config=col_config, use_container_width=True, num_rows="fixed", key="dm_emp_editor")
         if st.button("💾 Save changes", type="primary", key="dm_emp_save"):
-            name_to_id = {r.get("Name", ""): r.get("id", "") for r in records if r.get("Name")}
             changed, errors = 0, []
             for i in range(len(edited)):
                 row = edited.iloc[i]
-                name = str(row.get("Name", "")).strip()
-                orig_matches = edit_df[edit_df["Name"].astype(str).str.strip() == name]
-                if orig_matches.empty:
-                    continue
-                orig_row = orig_matches.iloc[0]
+                orig_row = edit_df.iloc[i]  # Same row order as edited
                 if orig_row.to_dict() != row.to_dict():
-                    orig_name = str(orig_row.get("Name", "")).strip()
-                    record_id = name_to_id.get(orig_name)
+                    record_id = id_col.iloc[i] if i < len(id_col) else None
                     if not record_id:
-                        errors.append(f"{orig_name or '?'}: Could not find record ID")
+                        errors.append(f"{row.get('Name', '?')}: Could not find record ID")
                         continue
                     fields = {}
                     for k, v in row.items():
@@ -982,7 +981,7 @@ def _render_employees_tab(client, base_id, tables_cfg, shop_display, shop_option
                         client.update_record(base_id, emp_table, record_id, fields)
                         changed += 1
                     except Exception as ex:
-                        errors.append(f"{orig_name or '?'}: {ex}")
+                        errors.append(f"{row.get('Name', '?')}: {ex}")
             for e in errors:
                 st.error(e)
             if changed:
