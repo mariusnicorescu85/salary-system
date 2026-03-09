@@ -872,6 +872,54 @@ def save_shop_targets(targets: Dict):
         logger.warning("Airtable save_shop_targets failed: %s", e)
 
 
+def _load_wage_vs_sales_for_month(shop_key: str, year: int, month: int, current_date) -> tuple:
+    """
+    Load wage vs sales totals for the current month (1st to current_date) from Airtable.
+    Returns (total_wages, total_sales) or (None, None) if not available.
+    """
+    base_id, api_key, _ = _get_airtable_credentials(shop_key)
+    if not base_id or not api_key:
+        return None, None
+    config = load_config() or {}
+    shop_config = config.get("shops", {}).get(shop_key, {})
+    tables_cfg = config.get("airtable_config_tables", {})
+    table_name = shop_config.get("wage_vs_sales_table") or tables_cfg.get("wage_vs_sales") or ""
+    shop_display = shop_config.get("shop_display_name") or shop_config.get("name", shop_key)
+    if not table_name:
+        return None, None
+    try:
+        from datetime import date
+        first_of_month = date(year, month, 1)
+        date_from = first_of_month.strftime("%Y-%m-%d")
+        date_to = current_date.strftime("%Y-%m-%d") if hasattr(current_date, "strftime") else str(current_date)[:10]
+        client = AirtableClient(api_key=api_key)
+        records = client.get_wage_vs_sales(base_id, table_name, shop=shop_display, date_from=date_from, date_to=date_to)
+        total_wages = 0.0
+        total_sales = 0.0
+
+        def _safe_float(val):
+            if val is None or val == "":
+                return 0.0
+            try:
+                return float(val)
+            except (ValueError, TypeError):
+                return 0.0
+
+        for r in records:
+            base_val = _safe_float(r.get("Base") or r.get("base"))
+            commission_val = _safe_float(r.get("Commission") or r.get("commission"))
+            total_wages_val = _safe_float(r.get("Total Wages") or r.get("total_wages")) or (base_val + commission_val)
+            sales_val = _safe_float(r.get("Sales") or r.get("sales"))
+            addl_val = _safe_float(r.get("Add'l Sales") or r.get("AddlSales") or r.get("addl_sales"))
+            total_sales_val = _safe_float(r.get("Total Sales") or r.get("total_sales")) or (sales_val + addl_val)
+            total_wages += total_wages_val
+            total_sales += total_sales_val
+        return total_wages, total_sales
+    except Exception as e:
+        logger.warning("_load_wage_vs_sales_for_month failed: %s", e)
+        return None, None
+
+
 def load_daily_targets() -> Dict:
     """Load saved daily targets per shop from Airtable."""
     base_id, api_key, tables = _get_airtable_credentials()
@@ -3277,6 +3325,30 @@ Table Name: {repr(table_name)} (type: {type(table_name).__name__})
                     """
                 )
 
+            # --- Wage vs sales badge (corner) ---
+            shop_key_wvs = st.session_state.get("selected_shop", list(load_config().get("shops", {}).keys())[0])
+            current_date_wvs = st.session_state.get("target_current_date", datetime.today().date())
+            year_wvs, month_wvs = current_date_wvs.year, current_date_wvs.month
+            month_key_wvs = f"{year_wvs}-{month_wvs:02d}"
+            cache_key = ("wvs_shop_target", shop_key_wvs, month_key_wvs)
+            if st.session_state.get("_wvs_cache_key") != cache_key:
+                tw, ts = _load_wage_vs_sales_for_month(shop_key_wvs, year_wvs, month_wvs, current_date_wvs)
+                st.session_state["_wvs_shop_target_totals"] = (tw, ts)
+                st.session_state["_wvs_cache_key"] = cache_key
+            tw_cached, ts_cached = st.session_state.get("_wvs_shop_target_totals", (None, None))
+            wage_pct_badge = (tw_cached / ts_cached * 100) if (tw_cached is not None and ts_cached and ts_cached > 0) else None
+            _, badge_col = st.columns([4, 1])
+            with badge_col:
+                if st.button("🔄 Refresh wage %", key="wvs_shop_target_refresh"):
+                    st.session_state["_wvs_cache_key"] = None  # Force reload on next run
+                    st.rerun()
+                if wage_pct_badge is not None:
+                    target_pct_badge = 25.0
+                    delta = wage_pct_badge - target_pct_badge
+                    st.metric("Wage % of sales (this month)", f"{wage_pct_badge:.1f}%", f"{delta:+.1f}% vs 25% target")
+                else:
+                    st.caption("Wage % of sales: configure wage_vs_sales_table and use **Refresh** to load from Airtable.")
+
             # --- Shop target tracker ---
             # Pre-fill from stored targets BEFORE the form (cannot modify widget-bound session state after widget is created)
             shop_key = st.session_state.get("selected_shop", list(load_config().get("shops", {}).keys())[0])
@@ -3405,7 +3477,6 @@ Table Name: {repr(table_name)} (type: {type(table_name).__name__})
                     st.metric("Total reached", format_currency(total_reached))
                     st.metric("Average so far", format_currency(average_so_far))
                 with c2:
-                    st.metric("Direction of", format_currency(direction_of))
                     st.metric("Projected total", format_currency(projected_total))
                     st.metric("Expected sales so far", format_currency(expected_so_far))
                 with c3:
