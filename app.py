@@ -3366,16 +3366,17 @@ Table Name: {repr(table_name)} (type: {type(table_name).__name__})
                 days_left = max(total_days - days_passed, 0)
 
                 average_so_far = total_reached / days_passed if days_passed > 0 else 0.0
-                direction_of = total_reached
+                direction_of = days_left * average_so_far  # Projected sales for remaining days
 
                 # Expected sales by today if you were exactly on track
                 expected_so_far = 0.0
                 if approved_target > 0 and total_days > 0 and days_passed > 0:
                     expected_so_far = approved_target * (days_passed / total_days)
 
-                # Compare actual progress against expected progress
-                if expected_so_far > 0:
-                    direction_vs_target_pct = (direction_of / expected_so_far) * 100.0
+                # Compare projected end-of-month total (total reached + projected remaining) vs target
+                projected_total = total_reached + direction_of
+                if approved_target > 0:
+                    direction_vs_target_pct = (projected_total / approved_target) * 100.0
                     diff_vs_target_pct = direction_vs_target_pct - 100.0
                 else:
                     direction_vs_target_pct = 0.0
