@@ -3337,17 +3337,6 @@ Table Name: {repr(table_name)} (type: {type(table_name).__name__})
                 st.session_state["_wvs_cache_key"] = cache_key
             tw_cached, ts_cached = st.session_state.get("_wvs_shop_target_totals", (None, None))
             wage_pct_badge = (tw_cached / ts_cached * 100) if (tw_cached is not None and ts_cached and ts_cached > 0) else None
-            _, badge_col = st.columns([4, 1])
-            with badge_col:
-                if st.button("🔄 Refresh wage %", key="wvs_shop_target_refresh"):
-                    st.session_state["_wvs_cache_key"] = None  # Force reload on next run
-                    st.rerun()
-                if wage_pct_badge is not None:
-                    target_pct_badge = 25.0
-                    delta = wage_pct_badge - target_pct_badge
-                    st.metric("Wage % of sales (this month)", f"{wage_pct_badge:.1f}%", f"{delta:+.1f}% vs 25% target")
-                else:
-                    st.caption("Wage % of sales: configure wage_vs_sales_table and use **Refresh** to load from Airtable.")
 
             # --- Shop target tracker ---
             # Pre-fill from stored targets BEFORE the form (cannot modify widget-bound session state after widget is created)
@@ -3461,7 +3450,7 @@ Table Name: {repr(table_name)} (type: {type(table_name).__name__})
                 st.markdown("---")
 
                 # High-level metrics
-                m1, m2, m3, m4 = st.columns(4)
+                m1, m2, m3, m4, m5 = st.columns(5)
                 with m1:
                     st.metric("Target", format_currency(approved_target))
                 with m2:
@@ -3470,6 +3459,16 @@ Table Name: {repr(table_name)} (type: {type(table_name).__name__})
                     st.metric("Days passed", days_passed)
                 with m4:
                     st.metric("Days left", days_left)
+                with m5:
+                    if st.button("🔄 Refresh wage %", key="wvs_shop_target_refresh"):
+                        st.session_state["_wvs_cache_key"] = None
+                        st.rerun()
+                    if wage_pct_badge is not None:
+                        target_pct_badge = 25.0
+                        delta = wage_pct_badge - target_pct_badge
+                        st.metric("Wage % of sales", f"{wage_pct_badge:.1f}%", f"{delta:+.1f}% vs 25%")
+                    else:
+                        st.metric("Wage % of sales", "—", "configure wage_vs_sales_table")
 
                 st.markdown("### Progress Summary")
                 c1, c2, c3 = st.columns(3)
