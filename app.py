@@ -3406,6 +3406,7 @@ Table Name: {repr(table_name)} (type: {type(table_name).__name__})
                     st.metric("Average so far", format_currency(average_so_far))
                 with c2:
                     st.metric("Direction of", format_currency(direction_of))
+                    st.metric("Projected total", format_currency(projected_total))
                     st.metric("Expected sales so far", format_currency(expected_so_far))
                 with c3:
                     st.metric(
