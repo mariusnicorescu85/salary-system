@@ -33,7 +33,7 @@ class DataProcessor:
             utc_value = utc_days * 86400
             date_info = datetime.fromtimestamp(utc_value)
             return date_info.strftime('%Y-%m-%d')
-        except:
+        except Exception:
             return None
     
     def excel_time_to_string(self, time: float) -> str:
@@ -43,7 +43,7 @@ class DataProcessor:
             hours = str(int(total_seconds // 3600)).zfill(2)
             minutes = str(int((total_seconds % 3600) // 60)).zfill(2)
             return f"{hours}:{minutes}"
-        except:
+        except Exception:
             return ""
     
     def smart_date_parser(self, value) -> Optional[str]:
@@ -711,7 +711,7 @@ class DataProcessor:
                 if hours_col:
                     try:
                         hours = float(row[hours_col]) if pd.notna(row[hours_col]) else 0.0
-                    except:
+                    except Exception:
                         hours = 0.0
                 
                 if hours <= 0:
@@ -722,7 +722,7 @@ class DataProcessor:
                 if sales_col:
                     try:
                         sales = float(row[sales_col]) if pd.notna(row[sales_col]) else 0.0
-                    except:
+                    except Exception:
                         sales = 0.0
                 
                 # Get additional sales
@@ -730,7 +730,7 @@ class DataProcessor:
                 if addl_sales_col:
                     try:
                         addl_sales = float(row[addl_sales_col]) if pd.notna(row[addl_sales_col]) else 0.0
-                    except:
+                    except Exception:
                         addl_sales = 0.0
                 
                 # Get hourly rate
@@ -738,7 +738,7 @@ class DataProcessor:
                 if hrly_rate_col:
                     try:
                         hrly_rate = float(row[hrly_rate_col]) if pd.notna(row[hrly_rate_col]) else 0.0
-                    except:
+                    except Exception:
                         hrly_rate = 0.0
                 
                 cleaned.append({

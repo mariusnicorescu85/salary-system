@@ -581,6 +581,21 @@ class AirtableClient:
 
     # --- Persistence for Streamlit Cloud: shop targets, daily targets, monthly adjustments ---
 
+    @staticmethod
+    def _normalize_month(m: str) -> str:
+        """Normalize month to YYYY-MM (e.g. 2024-3 -> 2024-03) for consistent key matching."""
+        if not m:
+            return ""
+        m = str(m).strip()
+        try:
+            parts = m.split("-")
+            if len(parts) == 2:
+                y, mo = parts[0], parts[1]
+                return f"{y}-{int(mo):02d}"
+        except (ValueError, IndexError):
+            pass
+        return m
+
     def get_shop_targets(self, base_id: str, table_name: str) -> Dict[str, Dict[str, Dict[str, Any]]]:
         """
         Load shop targets from Airtable. Table must have: Shop, Month, Approved Target.
@@ -599,9 +614,10 @@ class AirtableClient:
             val = fields.get("Approved Target") or fields.get("approved_target") or 0
             total_reached = fields.get("Total Reached") or fields.get("total_reached") or 0
             if shop and month:
+                month_norm = self._normalize_month(str(month))
                 if shop not in out:
                     out[shop] = {}
-                out[shop][str(month)] = {
+                out[shop][month_norm] = {
                     "approved_target": float(val),
                     "total_reached": float(total_reached),
                 }
@@ -610,7 +626,7 @@ class AirtableClient:
     def save_shop_targets(self, base_id: str, table_name: str, targets: Dict[str, Dict[str, Dict[str, Any]]]) -> None:
         """
         Save shop targets to Airtable. Table must have: Shop, Month, Approved Target.
-        Optional: Total Reached. Upserts by (Shop, Month).
+        Optional: Total Reached. Upserts by (Shop, Month). Normalizes month format (2024-3 <-> 2024-03).
         """
         table = self.api.table(base_id, table_name)
         try:
@@ -618,7 +634,7 @@ class AirtableClient:
         except Exception:
             existing = []
         by_key = {
-            (r["fields"].get("Shop") or r["fields"].get("shop"), str(r["fields"].get("Month") or r["fields"].get("month") or "")): r
+            (r["fields"].get("Shop") or r["fields"].get("shop"), self._normalize_month(str(r["fields"].get("Month") or r["fields"].get("month") or ""))): r
             for r in existing
             if (r["fields"].get("Shop") or r["fields"].get("shop")) and (r["fields"].get("Month") or r["fields"].get("month"))
         }
@@ -630,8 +646,9 @@ class AirtableClient:
                 total_reached = float((data or {}).get("total_reached") or 0)
                 if approved <= 0 and total_reached <= 0:
                     continue
-                key = (shop_key, str(month_key))
-                fields = {"Shop": shop_key, "Month": str(month_key), "Approved Target": approved, "Total Reached": total_reached}
+                month_norm = self._normalize_month(str(month_key))
+                key = (shop_key, month_norm)
+                fields = {"Shop": shop_key, "Month": month_norm, "Approved Target": approved, "Total Reached": total_reached}
                 if key in by_key:
                     to_update.append({"id": by_key[key]["id"], "fields": fields})
                 else:
@@ -1041,19 +1058,24 @@ class AirtableClient:
 
     # --- Employee config from Airtable (for running calculations from Airtable instead of YAML) ---
 
+    def _shop_filter_formula(self, shop_field: str, shop_esc: str) -> str:
+        """Formula to filter by shop. Supports multi-select Shop (array)."""
+        return f'FIND("{shop_esc}", ARRAYJOIN({{{shop_field}}})) > 0'
+
     def get_employees_for_shop(
         self, base_id: str, employees_table: str, shop_display_name: str,
         active_only: bool = True,
     ) -> List[Dict[str, Any]]:
         """
         Fetch employees for a shop from Airtable.
+        Supports multi-select Shop: returns employees whose Shop array contains the given shop.
         If active_only=True, returns only employees with Employment Status = "Active" (or blank).
         Excludes employees with Employment Status = "Inactive".
         """
         table = self.api.table(base_id, employees_table)
         shop_esc = (shop_display_name or "").replace('\\', '\\\\').replace('"', '\\"')
         try:
-            rows = table.all(formula=f'{{Shop}} = "{shop_esc}"')
+            rows = table.all(formula=self._shop_filter_formula("Shop", shop_esc))
         except Exception:
             return []
         records = [r.get("fields", {}) for r in rows]
@@ -1081,7 +1103,7 @@ class AirtableClient:
         formula = None
         for shop_field in ["Shop (from Employees)", "Shop"]:
             try:
-                formula = f'{{{shop_field}}} = "{shop_esc}"'
+                formula = self._shop_filter_formula(shop_field, shop_esc)
                 table.all(formula=formula)
                 break
             except Exception:
@@ -1140,7 +1162,7 @@ class AirtableClient:
         try:
             emp_table = self.api.table(base_id, employees_table)
             shop_esc = (shop_display_name or "").replace('\\', '\\\\').replace('"', '\\"')
-            emp_rows = emp_table.all(formula=f'{{Shop}} = "{shop_esc}"')
+            emp_rows = emp_table.all(formula=self._shop_filter_formula("Shop", shop_esc))
             for rec in emp_rows:
                 name = (rec.get("fields", {}).get("Name", "") or "").strip()
                 if name:
@@ -1164,7 +1186,7 @@ class AirtableClient:
         table = self.api.table(base_id, name_mappings_table)
         shop_esc = (shop_display_name or "").replace('\\', '\\\\').replace('"', '\\"')
         try:
-            rows = table.all(formula=f'{{Shop}} = "{shop_esc}"')
+            rows = table.all(formula=self._shop_filter_formula("Shop", shop_esc))
         except Exception:
             try:
                 rows = table.all()
@@ -1214,7 +1236,7 @@ class AirtableClient:
         table = self.api.table(base_id, sales_bonus_table)
         shop_esc = (shop_display_name or "").replace('\\', '\\\\').replace('"', '\\"')
         try:
-            rows = table.all(formula=f'{{Shop}} = "{shop_esc}"')
+            rows = table.all(formula=self._shop_filter_formula("Shop", shop_esc))
         except Exception:
             return {}
         out = {}
@@ -1257,7 +1279,7 @@ class AirtableClient:
         try:
             if shop_display_name:
                 shop_esc = (shop_display_name or "").replace('\\', '\\\\').replace('"', '\\"')
-                rows = table.all(formula=f'{{Shop}} = "{shop_esc}"')
+                rows = table.all(formula=self._shop_filter_formula("Shop", shop_esc))
             else:
                 rows = table.all()
         except Exception:
