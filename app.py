@@ -221,6 +221,12 @@ def _load_results_from_airtable(shop_key: str) -> Optional[Dict]:
             "Rent": _get_field(rec, "Rent", "rent"),
             "Advance": _get_field(rec, "Advance", "advance"),
             "BonusBreakdown": {},
+            "ProratedBasePay": _get_field(rec, "ProratedBasePay", "Prorated Base Pay", "prorated_base_pay"),
+            "ShopRangeSalesGross": _get_field(rec, "ShopRangeSalesGross", "Shop Range Sales Gross", "shop_range_sales_gross"),
+            "ShopRangeCommission": _get_field(rec, "ShopRangeCommission", "Shop Range Commission", "shop_range_commission"),
+            "PersonalCommission": _get_field(rec, "PersonalCommission", "Personal Commission", "personal_commission"),
+            "ShopRangeFirstDate": (rec.get("ShopRangeFirstDate") or rec.get("Shop Range First Date") or "") or "",
+            "ShopRangeLastDate": (rec.get("ShopRangeLastDate") or rec.get("Shop Range Last Date") or "") or "",
         }
     # Build daily by employee
     daily_by_emp = {}

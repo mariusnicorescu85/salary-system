@@ -138,6 +138,11 @@ def render(config):
 
         # Employee selector
         st.subheader("Employee Details")
+        if results_source == "airtable":
+            st.caption(
+                "Figures are read from **Airtable** (latest **Monthly Summary** rows there). "
+                "If pay looks wrong after changing rules (e.g. **dave_package**), run **Calculate** again and **export to Airtable** so summaries update."
+            )
         selected_employee = st.selectbox(
             "Select Employee",
             list(results.keys())
@@ -161,17 +166,62 @@ def render(config):
 
             # Detailed breakdown
             st.subheader("Payment Breakdown")
+            pt_norm = (summary.get('PaymentType') or '').lower().replace(' ', '_')
+            hs0 = float(summary.get('HoursSalary') or 0) == 0
+            tc0 = float(summary.get('TotalCommission') or 0) == 0
+            sales_pos = float(summary.get('Sales') or 0) > 0
+            days_pos = float(summary.get('WorkedDays') or 0) > 0
+            if sales_pos and days_pos and hs0 and tc0 and (
+                pt_norm == 'dave_package'
+                or (results_source == 'airtable' and float(summary.get('FinalPayment') or 0) < 0)
+            ):
+                st.warning(
+                    "**This summary looks incomplete:** prorated base and total commission are **£0** but there are worked days and sales. "
+                    "That usually means **Airtable** still has an **old Monthly Summary** (e.g. before **dave_package** or a failed export). "
+                    "Open **Calculate**, run for this shop with Dave on **dave_package**, then **export to Airtable** again—or rely on the saved results file from that run."
+                )
             breakdown_cols = ['Field', 'Value']
+            hours_salary_label = (
+                'Prorated base (monthly ÷ reference days × days worked)'
+                if pt_norm == 'dave_package'
+                else 'Hours Salary'
+            )
             breakdown_data = [
                 ['Worked Days', summary.get('WorkedDays', 0)],
                 ['Worked Hours', f"{summary.get('WorkedHours', 0):.2f}"],
                 ['Sales', format_currency(summary.get('Sales', 0))],
                 ['Additional Sales', format_currency(summary.get('AddlSales', 0))],
                 ['Adjusted Sales', format_currency(summary.get('AdjustedSales', 0))],
-                ['Hours Salary', format_currency(summary.get('HoursSalary', 0))],
+                [hours_salary_label, format_currency(summary.get('HoursSalary', 0))],
             ]
+            if pt_norm == 'dave_package':
+                pb = summary.get('ProratedBasePay')
+                if pb is not None and pb != '':
+                    try:
+                        if abs(float(pb) - float(summary.get('HoursSalary') or 0)) > 0.005:
+                            breakdown_data.append(['Prorated base (detail)', format_currency(float(pb))])
+                    except (TypeError, ValueError):
+                        pass
+                if summary.get('PersonalCommission') not in (None, '', 0):
+                    try:
+                        breakdown_data.append(['Personal commission (10%)', format_currency(float(summary.get('PersonalCommission')))])
+                    except (TypeError, ValueError):
+                        pass
+                if summary.get('ShopRangeSalesGross') not in (None, '', 0):
+                    try:
+                        breakdown_data.append(['Shop sales (first–last clock-in dates)', format_currency(float(summary.get('ShopRangeSalesGross')))])
+                    except (TypeError, ValueError):
+                        pass
+                if summary.get('ShopRangeCommission') not in (None, '', 0):
+                    try:
+                        breakdown_data.append(['Shop commission (1% of range)', format_currency(float(summary.get('ShopRangeCommission')))])
+                    except (TypeError, ValueError):
+                        pass
+                d0, d1 = summary.get('ShopRangeFirstDate') or '', summary.get('ShopRangeLastDate') or ''
+                if d0 and d1:
+                    breakdown_data.append(['Shop range (dates)', f"{d0} → {d1}"])
             wage_breakdown = summary.get('WageBracketBreakdown', [])
-            if not wage_breakdown:
+            if not wage_breakdown and pt_norm != 'dave_package':
                 breakdown_data.insert(-1, ['Rate per Hour', format_currency(summary.get('RatePerHour', 0))])
             if wage_breakdown:
                 for i, period in enumerate(wage_breakdown, 1):
@@ -180,8 +230,13 @@ def render(config):
                     label = f"{date_from} to {date_to}" if date_from != date_to else date_from
                     breakdown_data.append([f"  Period {i} ({label})", f"{period.get('hours', 0):.2f} hrs × £{period.get('rate', 0):.2f} = {format_currency(period.get('pay', 0))}"])
 
-            if summary.get('TotalCommission', 0) > 0:
-                breakdown_data.append(['Total Commission', format_currency(summary.get('TotalCommission', 0))])
+            total_comm = float(summary.get('TotalCommission') or 0)
+            if total_comm > 0 or pt_norm in (
+                'dave_package', 'commission_only', 'tiered_commission', 'hybrid_daily_max',
+                'molly_commission', 'progressive_tiered_commission', 'flat_rate_tiered_commission',
+                'flat_rate_tiered_commission_with_transport', 'alex_hybrid', 'net_commission_tiered',
+            ):
+                breakdown_data.append(['Total Commission', format_currency(total_comm)])
 
             bonus_breakdown = summary.get('BonusBreakdown', {})
             transport_val = bonus_breakdown.get('TransportFuel', 0) or 0
@@ -195,8 +250,9 @@ def render(config):
                 breakdown_data.append(['Manual Hours', f"{summary.get('ManualHours', 0):.2f}"])
                 breakdown_data.append(['Manual Hours Pay', format_currency(summary.get('ManualHoursPay', 0))])
 
-            if summary.get('Deductions', 0) > 0:
-                breakdown_data.append(['Deductions', format_currency(-summary.get('Deductions', 0))])
+            ded = float(summary.get('Deductions') or 0)
+            if ded != 0:
+                breakdown_data.append(['Deductions', format_currency(-ded)])
 
             if summary.get('Rent', 0) > 0:
                 pt = (summary.get('PaymentType') or '').lower()
