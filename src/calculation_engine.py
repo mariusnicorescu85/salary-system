@@ -3,8 +3,8 @@ Salary Calculation Engine
 Handles all payment calculations based on employee conditions
 """
 
-from typing import Dict, List, Optional
-from datetime import datetime
+from typing import Dict, List, Optional, Any
+from datetime import datetime, timedelta
 import pandas as pd
 
 # Optional import for UK wage bracket
@@ -22,6 +22,35 @@ class CalculationEngine:
         self.bonus_config = bonus_config
         self.wage_brackets = wage_brackets or []
     
+    @staticmethod
+    def build_shop_daily_sales_totals(records: List[Dict[str, Any]]) -> Dict[str, float]:
+        """
+        Sum Sales + AddlSales per calendar date across all rows in the report.
+        Used for shop-wide commissions (one shop per report file).
+        """
+        totals: Dict[str, float] = {}
+        for r in records or []:
+            d = r.get("Date")
+            if not d:
+                continue
+            day = str(d)[:10]
+            sales = float(r.get("Sales", 0) or 0)
+            addl = float(r.get("AddlSales", 0) or 0)
+            totals[day] = totals.get(day, 0.0) + sales + addl
+        return totals
+
+    @staticmethod
+    def _dates_inclusive(first: str, last: str) -> List[str]:
+        """Every calendar date from first through last (YYYY-MM-DD), inclusive."""
+        a = datetime.strptime(first[:10], "%Y-%m-%d")
+        b = datetime.strptime(last[:10], "%Y-%m-%d")
+        out: List[str] = []
+        cur = a
+        while cur <= b:
+            out.append(cur.strftime("%Y-%m-%d"))
+            cur += timedelta(days=1)
+        return out
+
     def _resolve_hourly_rate(self, employee: Dict, date_str: str) -> float:
         """Get hourly rate: use override if set, else UK wage bracket from DOB."""
         rate = employee.get("hourly_rate") or 0
@@ -250,12 +279,23 @@ class CalculationEngine:
             result['PaymentType'] = 'NetCommissionTiered'
         
         elif payment_type == 'commission_only':
-            # Simple commission only (Codruta, Dave, Isaac, Shany)
+            # Simple commission only (Codruta, Isaac, Shany)
             commission_rate = employee.get('commission_rate', 0)
             commission = total_sales * commission_rate
             result['Base'] = 0.0
             result['Commission'] = commission
             result['PaymentType'] = 'CommissionOnly'
+
+        elif payment_type == 'dave_package':
+            # Daily: personal sales % only; prorated base + shop % on range are monthly
+            commission_rate = employee.get('commission_rate')
+            if commission_rate is None or commission_rate == '':
+                commission_rate = 0.10
+            commission_rate = float(commission_rate)
+            commission = total_sales * commission_rate
+            result['Base'] = 0.0
+            result['Commission'] = commission
+            result['PaymentType'] = 'DavePackage'
         
         elif payment_type == 'progressive_tiered_commission':
             # Progressive tiered commission (Andreea)
@@ -331,8 +371,18 @@ class CalculationEngine:
                 result[key] = round(float(result[key]), 2)
         return result
     
-    def calculate_monthly_summary(self, daily_records: List[Dict]) -> Dict:
-        """Calculate monthly summary for an employee"""
+    def calculate_monthly_summary(
+        self,
+        daily_records: List[Dict],
+        shop_daily_sales_totals: Optional[Dict[str, float]] = None,
+    ) -> Dict:
+        """Calculate monthly summary for an employee.
+
+        shop_daily_sales_totals: date (YYYY-MM-DD) -> sum of Sales+AddlSales for that day across
+        the whole report. For dave_package: shop % applies to **total shop sales on every calendar day**
+        from Dave's first clock-in through last clock-in (inclusive), including days he did not work
+        (missing days in the file count as 0 for that day).
+        """
         if not daily_records:
             return {}
         
@@ -386,6 +436,13 @@ class CalculationEngine:
         method = None
         alex_transport = 0.0
         alex_rent = 0.0
+
+        # Optional breakdown for payment_type dave_package (filled in that branch)
+        dave_shop_range_sales = 0.0
+        dave_shop_commission = 0.0
+        dave_personal_commission = 0.0
+        dave_range_first = ''
+        dave_range_last = ''
         
         if payment_type == 'molly_commission':
             # Molly: Commission + manual hours + bonus - deductions - rent
@@ -404,6 +461,40 @@ class CalculationEngine:
             base_payment = total_commission + manual_hours_pay + total_bonus
             final_payment = base_payment - deductions - advance
         
+        elif payment_type == 'dave_package':
+            # Prorated base + personal % + shop % on sum of shop daily totals for every calendar day
+            # from first clock-in through last clock-in (inclusive), even if Dave had days off in between.
+            monthly_base = float(employee.get('monthly_base', 2250))
+            base_ref_days = float(employee.get('base_reference_days', 24))
+            if base_ref_days <= 0:
+                base_ref_days = 24
+            shop_rate_raw = employee.get('shop_commission_rate')
+            if shop_rate_raw is None or shop_rate_raw == '':
+                shop_rate = 0.01
+            else:
+                shop_rate = float(shop_rate_raw)
+
+            prorated_base = (monthly_base / base_ref_days) * worked_days
+            dave_personal_commission = total_commission
+            dates_worked = sorted({
+                str(r.get('Date', ''))[:10]
+                for r in daily_records
+                if r.get('Hours', 0) > 0.001 and r.get('Date')
+            })
+            shop_sales_in_range = 0.0
+            if len(dates_worked) >= 1:
+                dave_range_first = dates_worked[0]
+                dave_range_last = dates_worked[-1]
+                totals_map = shop_daily_sales_totals or {}
+                for d in self._dates_inclusive(dave_range_first, dave_range_last):
+                    shop_sales_in_range += float(totals_map.get(d, 0) or 0)
+            dave_shop_range_sales = shop_sales_in_range
+            dave_shop_commission = shop_sales_in_range * shop_rate
+            total_commission = dave_personal_commission + dave_shop_commission
+            hours_salary = prorated_base
+            base_payment = prorated_base + total_commission + total_bonus + manual_hours_pay
+            final_payment = base_payment - deductions - rent - advance
+
         elif payment_type == 'commission_only':
             # Commission only: Commission + bonus + manual hours - deductions - rent
             base_payment = total_commission + total_bonus + manual_hours_pay
@@ -572,5 +663,13 @@ class CalculationEngine:
         if payment_type == 'hybrid_daily_max':
             summary['MonthlyMaxMethod'] = method
             summary['MonthlyMaxAmount'] = round(monthly_max, 2)
+
+        if payment_type == 'dave_package':
+            summary['ProratedBasePay'] = summary['HoursSalary']
+            summary['ShopRangeSalesGross'] = round(dave_shop_range_sales, 2)
+            summary['ShopRangeCommission'] = round(dave_shop_commission, 2)
+            summary['PersonalCommission'] = round(dave_personal_commission, 2)
+            summary['ShopRangeFirstDate'] = dave_range_first
+            summary['ShopRangeLastDate'] = dave_range_last
         
         return summary

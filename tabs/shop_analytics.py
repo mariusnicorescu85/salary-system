@@ -121,6 +121,17 @@ def render(selected_shop, shop_config, config):
                 if payment_type == "commission_only" or payment_type == "CommissionOnly":
                     rate = cfg.get("commission_rate") or 0
                     return f"{rate * 100:.1f}%" if rate > 0 else "N/A"
+                if pt_norm == "dave_package":
+                    cr, sr = cfg.get("commission_rate"), cfg.get("shop_commission_rate")
+                    try:
+                        p = f"{float(cr) * 100:.0f}%" if cr not in (None, "") and float(cr) > 0 else "10%"
+                    except (TypeError, ValueError):
+                        p = "10%"
+                    try:
+                        s = f"{float(sr) * 100:.0f}%" if sr not in (None, "") and float(sr) > 0 else "1%"
+                    except (TypeError, ValueError):
+                        s = "1%"
+                    return f"Base/24 + personal {p} + shop {s}"
                 if payment_type in ("progressive_tiered_commission", "ProgressiveTieredCommission"):
                     return "Progressive 20-25%"
                 if payment_type in ("flat_rate_tiered_commission", "FlatRateTieredCommission"):

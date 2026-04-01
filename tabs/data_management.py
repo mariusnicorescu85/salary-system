@@ -25,7 +25,7 @@ def render(selected_shop: str, shop_config: dict, config: dict):
     shop_display = shop_config.get("shop_display_name") or shop_config.get("name", selected_shop)
     shop_options = [s.get("shop_display_name") or s.get("name", k) for k, s in config["shops"].items()]
     payment_types = [
-        "hourly_only", "commission_only", "manager", "sales_only",
+        "hourly_only", "commission_only", "dave_package", "manager", "sales_only",
         "progressive_tiered_commission", "hybrid_daily_max",
         "flat_rate_tiered_commission", "flat_rate_tiered_commission_with_transport",
         "tiered_commission", "molly_commission", "alex_hybrid", "net_commission_tiered"

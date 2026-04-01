@@ -312,6 +312,8 @@ def render(report_file, selected_shop, shop_config, config, append_to_airtable, 
                 # Initialize calculation engine
                 engine = CalculationEngine(employees, bonuses, wage_brackets=wage_brackets)
 
+                shop_daily_sales_totals = CalculationEngine.build_shop_daily_sales_totals(records)
+
                 # Group records by employee
                 employee_records = {}
                 for record in records:
@@ -362,7 +364,10 @@ def render(report_file, selected_shop, shop_config, config, append_to_airtable, 
                             daily_calcs.append(daily_calc)
                             all_daily_calculations.append(daily_calc)
 
-                        summary = engine.calculate_monthly_summary(daily_calcs)
+                        summary = engine.calculate_monthly_summary(
+                            daily_calcs,
+                            shop_daily_sales_totals=shop_daily_sales_totals,
+                        )
 
                         # Check if employee has zero final payment
                         if summary.get('FinalPayment', 0) == 0 and summary.get('WorkedHours', 0) > 0:
@@ -490,8 +495,16 @@ def render(report_file, selected_shop, shop_config, config, append_to_airtable, 
                         'Rent': summary.get('Rent', 0),
                         'Advance': summary.get('Advance', 0),
                         'FinalPayment': summary.get('FinalPayment', 0),
-                        'PaymentType': summary.get('PaymentType', '')
+                        'PaymentType': summary.get('PaymentType', ''),
                     })
+                    summary_row = airtable_records[-1]
+                    if summary.get('PaymentType') == 'dave_package':
+                        summary_row['ProratedBasePay'] = summary.get('ProratedBasePay', 0)
+                        summary_row['ShopRangeSalesGross'] = summary.get('ShopRangeSalesGross', 0)
+                        summary_row['ShopRangeCommission'] = summary.get('ShopRangeCommission', 0)
+                        summary_row['PersonalCommission'] = summary.get('PersonalCommission', 0)
+                        summary_row['ShopRangeFirstDate'] = summary.get('ShopRangeFirstDate', '') or ''
+                        summary_row['ShopRangeLastDate'] = summary.get('ShopRangeLastDate', '') or ''
 
                 # Sort: Daily records first (by Date, then Employee), then Monthly Summary (by Employee)
                 def _sort_key(r):

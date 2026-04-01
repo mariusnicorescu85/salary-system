@@ -224,7 +224,7 @@ class EmailClient:
         """Opatra-style email: gradient header, Mirela signature, PDF notice, advance flow."""
         payment_type = summary.get('PaymentType', '') or ''
         is_commission = payment_type in (
-            'commission_only', 'tiered_commission', 'progressive_tiered_commission',
+            'commission_only', 'dave_package', 'tiered_commission', 'progressive_tiered_commission',
             'hybrid_daily_max', 'molly_commission'
         )
         

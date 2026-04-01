@@ -626,6 +626,22 @@ def _load_employee_config_from_airtable(
                 emp["commission_rate"] = float(rec.get("Commission Rate"))
             except (TypeError, ValueError):
                 pass
+
+        if rec.get("Base Monthly Amount") is not None and rec.get("Base Monthly Amount") != "":
+            try:
+                emp["monthly_base"] = float(rec.get("Base Monthly Amount"))
+            except (TypeError, ValueError):
+                pass
+        if rec.get("Base Reference Days") is not None and rec.get("Base Reference Days") != "":
+            try:
+                emp["base_reference_days"] = float(rec.get("Base Reference Days"))
+            except (TypeError, ValueError):
+                pass
+        if rec.get("Shop Commission Rate") is not None and rec.get("Shop Commission Rate") != "":
+            try:
+                emp["shop_commission_rate"] = float(rec.get("Shop Commission Rate"))
+            except (TypeError, ValueError):
+                pass
         
         if rec.get("Daily Transport") is not None and rec.get("Daily Transport") != "":
             try:
@@ -1030,7 +1046,7 @@ def _render_employees_tab(client, base_id, tables_cfg, shop_display, shop_option
     except Exception as e:
         st.error(f"❌ Failed to load: {e}")
         records = []
-    editable_cols = ["Name", "Shop", "Date of Birth", "Email", "Payment Type", "Hourly Rate Override", "Commission Rate", "Daily Transport", "Rent", "Advance", "Employment Status"]
+    editable_cols = ["Name", "Shop", "Date of Birth", "Email", "Payment Type", "Hourly Rate Override", "Commission Rate", "Base Monthly Amount", "Base Reference Days", "Shop Commission Rate", "Daily Transport", "Rent", "Advance", "Employment Status"]
     num_cols = ("Hourly Rate Override", "Commission Rate", "Daily Transport", "Rent", "Advance")
     # Build canonical -> actual Airtable field name mapping (Airtable is case-sensitive)
     col_to_airtable = {}
