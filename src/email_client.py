@@ -6,7 +6,7 @@ Handles sending salary breakdown emails to employees
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 import os
 from datetime import datetime
 
@@ -243,6 +243,67 @@ class EmailClient:
         """
         
         return html
+
+    def _html_dave_package_breakdown_rows(self, summary: Dict[str, Any], daily_records: List[Dict]) -> str:
+        """Monthly Overview HTML rows for dave_package. Fills gaps when summary JSON omits breakdown keys."""
+        def _fkey(key: str):
+            v = summary.get(key)
+            if v is None or v == "":
+                return None
+            try:
+                return float(v)
+            except (TypeError, ValueError):
+                return None
+
+        personal = _fkey("PersonalCommission")
+        if personal is None:
+            personal = sum(float(r.get("Commission", 0) or 0) for r in daily_records)
+
+        tc = _fkey("TotalCommission")
+        if tc is None:
+            tc = 0.0
+        shop_comm = _fkey("ShopRangeCommission")
+        if shop_comm is None:
+            shop_comm = max(0.0, round(float(tc) - float(personal), 2))
+
+        shop_gross = _fkey("ShopRangeSalesGross")
+        if shop_gross is None and shop_comm:
+            shop_gross = round(shop_comm / 0.01, 2)
+        elif shop_gross is None:
+            shop_gross = 0.0
+
+        d0 = (summary.get("ShopRangeFirstDate") or "").strip()
+        d1 = (summary.get("ShopRangeLastDate") or "").strip()
+        if not d0 or not d1:
+            dates = sorted({
+                str(r.get("Date", ""))[:10]
+                for r in daily_records
+                if float(r.get("Hours", 0) or 0) > 0.001 and r.get("Date")
+            })
+            if dates:
+                d0, d1 = dates[0], dates[-1]
+
+        parts = []
+        if personal:
+            parts.append(
+                f'<tr><td><strong>Personal commission (10%):</strong></td>'
+                f'<td class="amount">{self.format_currency(personal)}</td></tr>'
+            )
+        if shop_gross or shop_comm:
+            parts.append(
+                f'<tr><td><strong>Shop sales (first–last clock-in dates):</strong></td>'
+                f'<td class="amount">{self.format_currency(shop_gross)}</td></tr>'
+            )
+            parts.append(
+                f'<tr><td><strong>Shop commission (1% of range):</strong></td>'
+                f'<td class="amount">{self.format_currency(shop_comm)}</td></tr>'
+            )
+        if d0 and d1:
+            parts.append(
+                f'<tr><td><strong>Shop range (dates):</strong></td>'
+                f'<td class="amount">{d0} → {d1}</td></tr>'
+            )
+        return "".join(parts)
     
     def _create_opatra_style_email(self, employee_name: str, summary: Dict,
                                    daily_records: List[Dict], bonus_breakdown: Dict,
@@ -252,6 +313,12 @@ class EmailClient:
         pt_key = _normalize_payment_type_key(summary.get("PaymentType"))
         if not pt_key and daily_records:
             pt_key = _normalize_payment_type_key(daily_records[0].get("PaymentType"))
+        if not pt_key and daily_records:
+            for r in daily_records:
+                pk = _normalize_payment_type_key(r.get("PaymentType"))
+                if pk == "dave_package":
+                    pt_key = "dave_package"
+                    break
         is_commission = pt_key in (
             "commission_only", "dave_package", "tiered_commission", "progressive_tiered_commission",
             "hybrid_daily_max", "molly_commission", "flat_rate_tiered_commission",
@@ -310,30 +377,7 @@ class EmailClient:
         salary_row_label = "Prorated base (package ÷ reference days × days worked):" if pt_key == "dave_package" else "Hours Salary:"
         dave_detail_rows = ""
         if pt_key == "dave_package":
-            try:
-                pc = float(summary.get("PersonalCommission") or 0)
-                if pc:
-                    dave_detail_rows += (
-                        f'<tr><td><strong>Personal sales commission:</strong></td>'
-                        f'<td class="amount">{self.format_currency(pc)}</td></tr>'
-                    )
-            except (TypeError, ValueError):
-                pass
-            try:
-                sg = float(summary.get("ShopRangeSalesGross") or 0)
-                sc = float(summary.get("ShopRangeCommission") or 0)
-                d0 = (summary.get("ShopRangeFirstDate") or "").strip()
-                d1 = (summary.get("ShopRangeLastDate") or "").strip()
-                if sg or sc:
-                    rng = f" ({d0} to {d1})" if d0 and d1 else ""
-                    dave_detail_rows += (
-                        f'<tr><td><strong>Shop sales in date range{rng}:</strong></td>'
-                        f'<td class="amount">{self.format_currency(sg)}</td></tr>'
-                        f'<tr><td><strong>Shop commission (1% of range):</strong></td>'
-                        f'<td class="amount">{self.format_currency(sc)}</td></tr>'
-                    )
-            except (TypeError, ValueError):
-                pass
+            dave_detail_rows = self._html_dave_package_breakdown_rows(summary, daily_records)
         
         # Deductions row
         deductions = summary.get('Deductions', 0) or 0
