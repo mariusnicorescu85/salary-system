@@ -387,6 +387,23 @@ class EmailClient:
                 <td colspan="2" style="padding: 12px 8px;">⚠️ DEDUCTIONS</td>
             </tr>
             <tr><td style="padding-left: 20px;"><em>Deductions:</em></td><td class="amount" style="color: #d32f2f;">-{self.format_currency(abs(deductions))}</td></tr>"""
+
+        try:
+            rent_amt = float(summary.get("Rent", 0) or 0)
+        except (TypeError, ValueError):
+            rent_amt = 0.0
+        rent_html = ""
+        if rent_amt != 0:
+            if pt_key == "alex_hybrid":
+                rent_html = (
+                    f'<tr><td><strong>Rent (chair / structure):</strong></td>'
+                    f'<td class="amount">{self.format_currency(abs(rent_amt))}</td></tr>'
+                )
+            else:
+                rent_html = (
+                    f'<tr><td><strong>Rent:</strong></td>'
+                    f'<td class="amount" style="color: #d32f2f;">-{self.format_currency(abs(rent_amt))}</td></tr>'
+                )
         
         # Hours + Bonus or Commission + Bonus row (for Total Before Advance context)
         if is_commission:
@@ -473,6 +490,7 @@ class EmailClient:
         {bonus_section_html}
         {mid_row}
         {deductions_html}
+        {rent_html}
         {f'<tr><td><strong>Total Before Advance (Invoice Amount):</strong></td><td class="amount">{self.format_currency(total_before_advance)}</td></tr><tr><td><strong>Advance Already Paid:</strong></td><td class="amount">- {self.format_currency(advance)}</td></tr>' if advance > 0 else ''}
         <tr><td><strong>Remaining To Pay:</strong></td><td class="amount">{self.format_currency(final_pay)}</td></tr>
       </table>
