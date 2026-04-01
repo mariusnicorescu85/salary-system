@@ -75,7 +75,7 @@ class GoogleDriveClient:
     
     def download_file(self, file_id: str) -> bytes:
         """Download a file from Google Drive by file ID"""
-        request = self.service.files().get_media(fileId=file_id)
+        request = self.service.files().get_media(fileId=file_id, supportsAllDrives=True)
         file_content = io.BytesIO()
         downloader = MediaIoBaseDownload(file_content, request)
         
@@ -89,7 +89,12 @@ class GoogleDriveClient:
     def list_files_in_folder(self, folder_id: str) -> List[dict]:
         """List all files in a Google Drive folder"""
         query = f"'{folder_id}' in parents and trashed=false"
-        results = self.service.files().list(q=query, fields="files(id, name, mimeType)").execute()
+        results = self.service.files().list(
+            q=query,
+            fields="files(id, name, mimeType)",
+            includeItemsFromAllDrives=True,
+            supportsAllDrives=True,
+        ).execute()
         return results.get('files', [])
     
     def find_file_by_name(self, folder_id: str, filename: str) -> Optional[str]:
@@ -101,26 +106,31 @@ class GoogleDriveClient:
         return None
     
     def upload_file(self, content: bytes, filename: str, folder_id: str,
-                    mime_type: Optional[str] = None) -> Optional[str]:
+                    mime_type: Optional[str] = None) -> str:
         """
         Upload a file to a Google Drive folder.
-        Returns the file ID on success, None on failure.
+        Returns the file ID on success. Raises on API or validation errors.
         """
         if not folder_id or not folder_id.strip():
-            return None
+            raise ValueError("folder_id is required")
         if mime_type is None:
             ext = os.path.splitext(filename)[1].lower()
             mime_type = {
                 '.csv': 'text/csv',
                 '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
             }.get(ext, 'application/octet-stream')
-        try:
-            file_metadata = {'name': filename, 'parents': [folder_id.strip()]}
-            media = MediaIoBaseUpload(io.BytesIO(content), mimetype=mime_type, resumable=True)
-            file = self.service.files().create(body=file_metadata, media_body=media, fields='id').execute()
-            return file.get('id')
-        except Exception:
-            return None
+        file_metadata = {'name': filename, 'parents': [folder_id.strip()]}
+        media = MediaIoBaseUpload(io.BytesIO(content), mimetype=mime_type, resumable=True)
+        file = self.service.files().create(
+            body=file_metadata,
+            media_body=media,
+            fields='id',
+            supportsAllDrives=True,
+        ).execute()
+        fid = file.get('id')
+        if not fid:
+            raise RuntimeError("Google Drive API returned no file id")
+        return fid
     
     def download_csv_as_dataframe(self, file_id: str) -> pd.DataFrame:
         """Download a CSV file and return as pandas DataFrame"""

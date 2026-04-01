@@ -33,6 +33,7 @@ from src.calculation_engine import CalculationEngine
 from src.data_processor import DataProcessor
 from src.airtable_client import AirtableClient, _normalize_date_for_key
 from src.email_client import EmailClient
+from googleapiclient.errors import HttpError
 from src.google_drive_client import GoogleDriveClient
 
 
@@ -314,22 +315,68 @@ def _load_saved_report(filename: str):
         return None
 
 
-def _get_google_drive_client():
-    """Get Google Drive client if configured (Service Account from secrets, or OAuth from credentials/)."""
+def _get_service_account_json_from_secrets():
+    """Read [google_drive] service_account_json from Streamlit secrets (Cloud) or secrets.toml (local)."""
+    if not hasattr(st, "secrets"):
+        return None
     try:
-        # Service Account (for Streamlit Cloud)
-        sa_json = None
-        if hasattr(st, 'secrets') and st.secrets.get('google_drive', {}).get('service_account_json'):
-            sa_json = st.secrets.google_drive.service_account_json
+        section = st.secrets["google_drive"]
+    except (KeyError, TypeError):
+        return None
+    raw = None
+    if isinstance(section, dict):
+        raw = section.get("service_account_json")
+    else:
+        raw = getattr(section, "service_account_json", None)
+    if raw is None and isinstance(section, dict):
+        try:
+            raw = section["service_account_json"]
+        except KeyError:
+            pass
+    if raw is None:
+        return None
+    if isinstance(raw, str) and not raw.strip():
+        return None
+    return raw
+
+
+def _try_google_drive_client() -> Tuple[Optional[GoogleDriveClient], Optional[str]]:
+    """
+    Build a Drive client (service account from Secrets on Cloud, or OAuth files locally).
+    Returns (client, None) on success, (None, user-facing error) on failure.
+    """
+    try:
+        sa_json = _get_service_account_json_from_secrets()
         if sa_json:
-            return GoogleDriveClient(service_account_json=sa_json)
-        # OAuth (local - credentials in credentials/ folder)
+            try:
+                return GoogleDriveClient(service_account_json=sa_json), None
+            except Exception as e:
+                logger.exception("Google Drive service account init failed")
+                return None, f"Service account in Secrets is invalid or incomplete: {e}"
+
         creds_path = Path('credentials/google_drive_credentials.json')
         if creds_path.exists():
-            return GoogleDriveClient()
+            try:
+                return GoogleDriveClient(), None
+            except Exception as e:
+                logger.exception("Google Drive OAuth init failed")
+                return None, str(e)
+
+        return None, (
+            "Streamlit Cloud has no credentials/google_drive_credentials.json (it is not deployed). "
+            "Add [google_drive] with service_account_json in App settings → Secrets, then share your "
+            "reports folder with the JSON's client_email (Editor). For Shared Drives, the folder must "
+            "live in a drive the service account can access."
+        )
     except Exception as e:
-        logger.debug(f"Google Drive not available: {e}")
-    return None
+        logger.exception("Google Drive client setup failed")
+        return None, str(e)
+
+
+def _get_google_drive_client() -> Optional[GoogleDriveClient]:
+    """Get Google Drive client if configured (Service Account from secrets, or OAuth from credentials/)."""
+    client, _ = _try_google_drive_client()
+    return client
 
 
 def _get_saved_reports_folder_id(shop_key: str) -> str:
@@ -338,27 +385,49 @@ def _get_saved_reports_folder_id(shop_key: str) -> str:
     if not config or not shop_key:
         return ""
     shop = config.get('shops', {}).get(shop_key, {})
-    return (shop.get('saved_reports_folder_id') or "").strip()
+    for key in ("saved_reports_folder_id", "google_drive_folder_id"):
+        folder = (shop.get(key) or "").strip()
+        if folder:
+            return folder
+    return ""
 
 
-def _save_report_to_gdrive(uploaded_file, folder_id: str) -> bool:
-    """Save uploaded file to Google Drive. Returns True on success."""
+def _format_gdrive_error(exc: Exception) -> str:
+    """Short user-facing message for Google Drive API failures."""
+    if isinstance(exc, HttpError):
+        try:
+            payload = json.loads(exc.content.decode() if exc.content else "{}")
+            msg = (payload.get("error") or {}).get("message") or str(exc)
+        except (json.JSONDecodeError, TypeError, AttributeError):
+            msg = str(exc)
+        if exc.resp is not None and exc.resp.status:
+            return f"{exc.resp.status} — {msg}"
+        return msg
+    return str(exc)
+
+
+def _save_report_to_gdrive(uploaded_file, folder_id: str) -> Tuple[bool, Optional[str]]:
+    """
+    Save uploaded file to Google Drive.
+    Returns (True, None) on success, (False, error_message) on failure.
+    """
     if not uploaded_file or not folder_id:
-        return False
-    client = _get_google_drive_client()
+        return False, "Missing upload or folder ID in configuration."
+    client, init_err = _try_google_drive_client()
     if not client:
-        return False
+        return False, init_err or "Google Drive credentials are missing or invalid."
     try:
         uploaded_file.seek(0)
         content = uploaded_file.read()
         ext = Path(uploaded_file.name).suffix.lower()
         now = datetime.now()
         filename = f"report_{now.month:02d}_{now.year}{ext}"
-        file_id = client.upload_file(content, filename, folder_id)
-        return file_id is not None
+        client.upload_file(content, filename, folder_id)
+        return True, None
     except Exception as e:
-        logger.error(f"Failed to save report to Google Drive: {e}")
-        return False
+        detail = _format_gdrive_error(e)
+        logger.error(f"Failed to save report to Google Drive: {detail}")
+        return False, detail
 
 
 def _list_gdrive_reports(folder_id: str) -> List[dict]:
@@ -1604,11 +1673,17 @@ def main():
                     gdrive_client = _get_google_drive_client()
                     if gdrive_folder and gdrive_client:
                         if st.button("☁️ Save to Google Drive", help="Save to Google Drive (persists on cloud)"):
-                            if _save_report_to_gdrive(uploaded_file, gdrive_folder):
+                            ok, err = _save_report_to_gdrive(uploaded_file, gdrive_folder)
+                            if ok:
                                 st.success("✅ Saved to Google Drive!")
                                 st.rerun()
                             else:
-                                st.error("Failed to save to Drive")
+                                st.error(f"Failed to save to Drive: {err or 'Unknown error'}")
+                                st.caption(
+                                    "Typical fixes: share the Drive folder with your Google account "
+                                    "(OAuth) or with the service account email (Streamlit Cloud / API key JSON). "
+                                    "Confirm `saved_reports_folder_id` or `google_drive_folder_id` in shops config is the folder ID, not a file link."
+                                )
                     elif gdrive_folder and not gdrive_client:
                         st.caption("⚠️ Configure Google Drive credentials to save")
 
