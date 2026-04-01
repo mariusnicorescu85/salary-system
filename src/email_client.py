@@ -11,6 +11,33 @@ import os
 from datetime import datetime
 
 
+def _normalize_payment_type_key(payment_type) -> str:
+    """Canonical snake_case payment type for branching (handles CommissionOnly, DavePackage, etc.)."""
+    if payment_type is None:
+        return ""
+    s = str(payment_type).strip()
+    if not s:
+        return ""
+    key = s.lower().replace(" ", "_").replace("-", "_")
+    # Daily export / Airtable PascalCase → snake_case
+    pascal = {
+        "commissiononly": "commission_only",
+        "davepackage": "dave_package",
+        "hourlyonly": "hourly_only",
+        "hybriddailymax": "hybrid_daily_max",
+        "monthlymaxlater": "tiered_commission",
+        "mollycommission": "molly_commission",
+        "progressivetieredcommission": "progressive_tiered_commission",
+        "flatratetieredcommission": "flat_rate_tiered_commission",
+        "flatratetieredwithtransport": "flat_rate_tiered_commission_with_transport",
+        "netcommissiontiered": "net_commission_tiered",
+        "alexoldstructure": "alex_hybrid",
+        "alexnewstructure": "alex_hybrid",
+        "salesonly": "sales_only",
+    }
+    return pascal.get(key, key)
+
+
 class EmailClient:
     """Client for sending emails"""
     
@@ -222,10 +249,13 @@ class EmailClient:
                                    month_name: str, shop_name: str,
                                    invoice_submission_email: str) -> str:
         """Opatra-style email: gradient header, Mirela signature, PDF notice, advance flow."""
-        payment_type = summary.get('PaymentType', '') or ''
-        is_commission = payment_type in (
-            'commission_only', 'dave_package', 'tiered_commission', 'progressive_tiered_commission',
-            'hybrid_daily_max', 'molly_commission'
+        pt_key = _normalize_payment_type_key(summary.get("PaymentType"))
+        if not pt_key and daily_records:
+            pt_key = _normalize_payment_type_key(daily_records[0].get("PaymentType"))
+        is_commission = pt_key in (
+            "commission_only", "dave_package", "tiered_commission", "progressive_tiered_commission",
+            "hybrid_daily_max", "molly_commission", "flat_rate_tiered_commission",
+            "flat_rate_tiered_commission_with_transport", "net_commission_tiered", "alex_hybrid",
         )
         
         advance = abs(summary.get('Advance', 0) or 0)
@@ -274,6 +304,36 @@ class EmailClient:
             )
             wage_breakdown_html = f'<tr style="background: #f5f5f5; font-weight: bold; border-top: 2px solid #9e9e9e;"><td colspan="2" style="padding: 12px 8px;">📋 Wage Bracket Breakdown (rate varied mid-month)</td></tr>{rows}'
         hourly_rate_row = "" if wage_breakdown else f'<tr><td><strong>Hourly Rate:</strong></td><td class="amount">{self.format_currency(summary.get("RatePerHour", 0))}</td></tr>'
+        if pt_key == "dave_package":
+            hourly_rate_row = ""
+
+        salary_row_label = "Prorated base (package ÷ reference days × days worked):" if pt_key == "dave_package" else "Hours Salary:"
+        dave_detail_rows = ""
+        if pt_key == "dave_package":
+            try:
+                pc = float(summary.get("PersonalCommission") or 0)
+                if pc:
+                    dave_detail_rows += (
+                        f'<tr><td><strong>Personal sales commission:</strong></td>'
+                        f'<td class="amount">{self.format_currency(pc)}</td></tr>'
+                    )
+            except (TypeError, ValueError):
+                pass
+            try:
+                sg = float(summary.get("ShopRangeSalesGross") or 0)
+                sc = float(summary.get("ShopRangeCommission") or 0)
+                d0 = (summary.get("ShopRangeFirstDate") or "").strip()
+                d1 = (summary.get("ShopRangeLastDate") or "").strip()
+                if sg or sc:
+                    rng = f" ({d0} to {d1})" if d0 and d1 else ""
+                    dave_detail_rows += (
+                        f'<tr><td><strong>Shop sales in date range{rng}:</strong></td>'
+                        f'<td class="amount">{self.format_currency(sg)}</td></tr>'
+                        f'<tr><td><strong>Shop commission (1% of range):</strong></td>'
+                        f'<td class="amount">{self.format_currency(sc)}</td></tr>'
+                    )
+            except (TypeError, ValueError):
+                pass
         
         # Deductions row
         deductions = summary.get('Deductions', 0) or 0
@@ -286,7 +346,7 @@ class EmailClient:
         
         # Hours + Bonus or Commission + Bonus row (for Total Before Advance context)
         if is_commission:
-            mid_row = f'<tr><td><strong>Total Commission:</strong></td><td class="amount">{self.format_currency(total_commission)}</td></tr>'
+            mid_row = f'<tr><td><strong>Total commission{(" (personal + shop)" if pt_key == "dave_package" else "")}:</strong></td><td class="amount">{self.format_currency(total_commission)}</td></tr>'
         else:
             mid_row = f'<tr><td><strong>Hours + Bonus:</strong></td><td class="amount">{self.format_currency(hours_plus_bonus)}</td></tr>' if total_bonus > 0 else ''
         
@@ -298,9 +358,12 @@ class EmailClient:
                 f'<td class="amount">{self.format_currency(r.get("Commission", 0))}</td></tr>'
                 for r in daily_records
             )
-            daily_header = "<tr><th class=\"left\">Date</th><th>Hours</th><th>Sales</th><th>Addl Sales</th><th>Commission</th></tr>"
+            comm_header = "Personal commission (day)" if pt_key == "dave_package" else "Commission"
+            daily_header = (
+                f"<tr><th class=\"left\">Date</th><th>Hours</th><th>Sales</th><th>Addl Sales</th><th>{comm_header}</th></tr>"
+            )
             header_title = "Commission Breakdown"
-            commission_badge = '<span class="commission-badge">COMMISSION</span>'
+            commission_badge = '<span class="commission-badge">COMMISSION</span>' if pt_key != "dave_package" else '<span class="commission-badge">PACKAGE PAY</span>'
         else:
             daily_rows = "".join(
                 f'<tr><td class="left">{r.get("Date", "")}</td><td>{r.get("Hours", 0):.2f}</td>'
@@ -360,7 +423,8 @@ class EmailClient:
         <tr><td><strong>Days Worked:</strong></td><td class="amount">{summary.get('WorkedDays', 0)} days</td></tr>
         <tr><td><strong>Total Hours:</strong></td><td class="amount">{summary.get('WorkedHours', 0):.2f} hours</td></tr>
         {hourly_rate_row}
-        <tr><td><strong>Hours Salary:</strong></td><td class="amount">{self.format_currency(hours_salary)}</td></tr>
+        <tr><td><strong>{salary_row_label}</strong></td><td class="amount">{self.format_currency(hours_salary)}</td></tr>
+        {dave_detail_rows}
         {wage_breakdown_html}
         {bonus_section_html}
         {mid_row}
