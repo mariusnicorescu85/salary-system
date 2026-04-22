@@ -2301,7 +2301,12 @@ def main():
                     if wage_pct_badge is not None:
                         target_pct_badge = 25.0
                         delta = wage_pct_badge - target_pct_badge
-                        st.metric("Wage % of sales", f"{wage_pct_badge:.1f}%", f"{delta:+.1f}% vs 25%")
+                        st.metric(
+                            "Wage % of sales",
+                            f"{wage_pct_badge:.1f}%",
+                            f"{delta:+.1f}% vs 25%",
+                            delta_color="inverse",
+                        )
                     else:
                         st.metric("Wage % of sales", "—", "configure wage_vs_sales_table")
 
