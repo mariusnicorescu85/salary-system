@@ -9,7 +9,7 @@ import yaml
 import json
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 import io
 import logging
 import sys
@@ -1139,7 +1139,13 @@ def _render_employees_tab(client, base_id, tables_cfg, shop_display, shop_option
                 with n1:
                     na = st.text_input("Name", key="dm_emp_na")
                     em = st.text_input("Email", key="dm_emp_em")
-                    dob = st.date_input("Date of Birth", value=None, key="dm_emp_dob")
+                    dob = st.date_input(
+                        "Date of Birth",
+                        value=None,
+                        min_value=date(1900, 1, 1),
+                        max_value=date.today(),
+                        key="dm_emp_dob",
+                    )
                     sh = st.multiselect("Shop", shop_options, key="dm_emp_sh")
                     pt = st.selectbox("Payment Type", payment_types, key="dm_emp_pt")
                     sts = st.selectbox("Employment Status", ["Active", "Inactive"], key="dm_emp_sts")
