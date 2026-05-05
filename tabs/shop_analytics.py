@@ -221,7 +221,8 @@ def render(selected_shop, shop_config, config):
             total_worked_hours = sum(d["summary"].get("WorkedHours", 0) for d in results.values())
             shop_total_sales_only = sum(d["summary"].get("Sales", 0) for d in results.values())
             shop_total_addl = sum(d["summary"].get("AddlSales", 0) for d in results.values())
-            shop_efficiency = (shop_total_salary / shop_total_sales * 100) if shop_total_sales > 0 else 0
+            shop_adjusted_sales = shop_total_sales_only + shop_total_addl
+            shop_efficiency = (shop_total_salary / shop_adjusted_sales * 100) if shop_adjusted_sales > 0 else 0
             month_period_shop = (analytics_rows[0]["Period"] if analytics_rows else "") or datetime.now().strftime("%Y-%m")
 
             analytics_rows.append({
@@ -236,12 +237,12 @@ def render(selected_shop, shop_config, config):
                 "BasePayment": 0,
                 "TotalSales": round(shop_total_sales_only, 2),
                 "AddlSales": round(shop_total_addl, 2),
-                "AdjustedSales": round(shop_total_sales, 2),
+                "AdjustedSales": round(shop_adjusted_sales, 2),
                 "SalesCommission": 0,
                 "BonusPayment": 0,
                 "FinalTotal": round(shop_total_salary, 2),
-                "AvgSalesPerDay": round(shop_total_sales / total_worked_days, 2) if total_worked_days > 0 else 0,
-                "AvgSalesPerHour": round(shop_total_sales / total_worked_hours, 2) if total_worked_hours > 0 else 0,
+                "AvgSalesPerDay": round(shop_adjusted_sales / total_worked_days, 2) if total_worked_days > 0 else 0,
+                "AvgSalesPerHour": round(shop_adjusted_sales / total_worked_hours, 2) if total_worked_hours > 0 else 0,
                 "Description": f"Shop efficiency: {shop_efficiency:.2f}%",
                 "ConfigVersion": "SHOP-v1",
                 "DataIssues": "None",
