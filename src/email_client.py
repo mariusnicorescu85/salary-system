@@ -38,6 +38,16 @@ def _normalize_payment_type_key(payment_type) -> str:
     return pascal.get(key, key)
 
 
+def employment_requires_invoice_instructions(employment: Optional[str]) -> bool:
+    """Consultancy and unassigned need invoice/PDF instructions; Payroll does not."""
+    if employment is None:
+        return True
+    v = str(employment).strip().lower()
+    if not v:
+        return True
+    return v != "payroll"
+
+
 class EmailClient:
     """Client for sending emails"""
     
@@ -69,11 +79,12 @@ class EmailClient:
     
     def create_breakdown_email(self, employee_name: str, summary: Dict, 
                               daily_records: List[Dict], employee_email: str,
-                              shop_name: str = None, invoice_submission_email: str = None) -> str:
+                              shop_name: str = None, invoice_submission_email: str = None,
+                              employment: Optional[str] = None) -> str:
         """
         Create HTML email with salary breakdown.
         When shop_name is provided, uses Opatra-style template with gradient header,
-        Mirela signature, PDF invoice notice, and Total Before Advance / Advance / Remaining flow.
+        Mirela signature, optional PDF invoice notice, and Total Before Advance / Advance / Remaining flow.
         
         Args:
             employee_name: Employee name
@@ -82,6 +93,7 @@ class EmailClient:
             employee_email: Employee email address
             shop_name: Optional shop name (e.g. "Opatra") for styled template
             invoice_submission_email: Where staff send PDF invoices (e.g. invoices.opulent@gmail.com)
+            employment: Airtable \"Employment\" single select (Consultancy / Payroll); blank treats as Consultancy
             
         Returns:
             HTML email content
@@ -101,7 +113,8 @@ class EmailClient:
         if shop_name:
             return self._create_opatra_style_email(
                 employee_name, summary, daily_records, bonus_breakdown,
-                month_name, shop_name, invoice_submission_email or ""
+                month_name, shop_name, invoice_submission_email or "",
+                include_invoice_instructions=employment_requires_invoice_instructions(employment),
             )
         
         # Legacy simple template
@@ -308,8 +321,9 @@ class EmailClient:
     def _create_opatra_style_email(self, employee_name: str, summary: Dict,
                                    daily_records: List[Dict], bonus_breakdown: Dict,
                                    month_name: str, shop_name: str,
-                                   invoice_submission_email: str) -> str:
-        """Opatra-style email: gradient header, Mirela signature, PDF notice, advance flow."""
+                                   invoice_submission_email: str,
+                                   include_invoice_instructions: bool = True) -> str:
+        """Opatra-style email: gradient header; invoice/PDF blocks only when include_invoice_instructions."""
         pt_key = _normalize_payment_type_key(summary.get("PaymentType"))
         if not pt_key and daily_records:
             pt_key = _normalize_payment_type_key(daily_records[0].get("PaymentType"))
@@ -436,7 +450,69 @@ class EmailClient:
             commission_badge = ""
         
         invoice_email = invoice_submission_email or "invoices.opulent@gmail.com"
-        
+
+        if include_invoice_instructions:
+            intro_html = f"""  <p>Hi {employee_name},</p>
+  <p>
+    Please see below your breakdown, kindly send your invoice <strong>in PDF format</strong> as soon as possible.<br><br>
+    No chasing email will be sent, please be responsible.<br><br>
+    Many thanks,<br>
+    Mirela
+  </p>"""
+            if advance > 0:
+                advance_rows_html = (
+                    f'<tr><td><strong>Total Before Advance (Invoice Amount):</strong></td>'
+                    f'<td class="amount">{self.format_currency(total_before_advance)}</td></tr>'
+                    f'<tr><td><strong>Advance Already Paid:</strong></td>'
+                    f'<td class="amount">- {self.format_currency(advance)}</td></tr>'
+                )
+            else:
+                advance_rows_html = ""
+            pdf_notice_html = f"""    <div class="pdf-notice">
+      <h3 style="margin-top: 0;">📄 IMPORTANT: Invoice Submission Requirements</h3>
+      <ul style="margin: 10px 0;">
+        <li><strong style="color: #d32f2f;">Your invoice MUST be submitted in PDF format</strong></li>
+        <li>Invoice amount: <strong>{self.format_currency(total_before_advance)}</strong> (Total Before Advance)</li>
+        <li>Send to: <strong>{invoice_email}</strong></li>
+        <li>Please ensure your invoice is a PDF file before sending</li>
+      </ul>
+    </div>"""
+            important_notes_html = f"""    <div class="summary-box">
+      <h3>📝 Important Notes</h3>
+      <ul>
+        <li>This summary covers {month_name}.</li>
+        <li>Please issue your invoice for the <strong>Total Before Advance (Invoice Amount)</strong>.</li>
+        <li><strong>Invoice must be in PDF format</strong> when submitting to <strong>{invoice_email}</strong>.</li>
+        <li>Payment will be processed according to the usual schedule, after you submit the invoice.</li>
+        <li>If you have questions about your payment, please contact the Management Team before submitting the invoice.</li>
+      </ul>
+    </div>"""
+        else:
+            intro_html = f"""  <p>Hi {employee_name},</p>
+  <p>
+    Please see below your breakdown for {month_name}.<br><br>
+    Many thanks,<br>
+    Mirela
+  </p>"""
+            if advance > 0:
+                advance_rows_html = (
+                    f'<tr><td><strong>Total Before Advance:</strong></td>'
+                    f'<td class="amount">{self.format_currency(total_before_advance)}</td></tr>'
+                    f'<tr><td><strong>Advance Already Paid:</strong></td>'
+                    f'<td class="amount">- {self.format_currency(advance)}</td></tr>'
+                )
+            else:
+                advance_rows_html = ""
+            pdf_notice_html = ""
+            important_notes_html = f"""    <div class="summary-box">
+      <h3>📝 Important Notes</h3>
+      <ul>
+        <li>This summary covers {month_name}.</li>
+        <li>Payment will be processed according to the usual schedule.</li>
+        <li>If you have questions about your payment, please contact the Management Team.</li>
+      </ul>
+    </div>"""
+
         html = f"""
 <!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0">
 <title>Monthly Breakdown - {shop_name}</title>
@@ -460,13 +536,7 @@ class EmailClient:
   .summary-box table td:first-child {{ text-align: left; }}
 </style></head>
 <body>
-  <p>Hi {employee_name},</p>
-  <p>
-    Please see below your breakdown, kindly send your invoice <strong>in PDF format</strong> as soon as possible.<br><br>
-    No chasing email will be sent, please be responsible.<br><br>
-    Many thanks,<br>
-    Mirela
-  </p>
+{intro_html}
 
   <div class="header">
     <h1 class="employee-name">{employee_name} – {header_title} {commission_badge}</h1>
@@ -491,7 +561,7 @@ class EmailClient:
         {mid_row}
         {deductions_html}
         {rent_html}
-        {f'<tr><td><strong>Total Before Advance (Invoice Amount):</strong></td><td class="amount">{self.format_currency(total_before_advance)}</td></tr><tr><td><strong>Advance Already Paid:</strong></td><td class="amount">- {self.format_currency(advance)}</td></tr>' if advance > 0 else ''}
+        {advance_rows_html}
         <tr><td><strong>Remaining To Pay:</strong></td><td class="amount">{self.format_currency(final_pay)}</td></tr>
       </table>
     </div>
@@ -514,26 +584,9 @@ class EmailClient:
       </table>
     </div>
 
-    <div class="pdf-notice">
-      <h3 style="margin-top: 0;">📄 IMPORTANT: Invoice Submission Requirements</h3>
-      <ul style="margin: 10px 0;">
-        <li><strong style="color: #d32f2f;">Your invoice MUST be submitted in PDF format</strong></li>
-        <li>Invoice amount: <strong>{self.format_currency(total_before_advance)}</strong> (Total Before Advance)</li>
-        <li>Send to: <strong>{invoice_email}</strong></li>
-        <li>Please ensure your invoice is a PDF file before sending</li>
-      </ul>
-    </div>
+{pdf_notice_html}
 
-    <div class="summary-box">
-      <h3>📝 Important Notes</h3>
-      <ul>
-        <li>This summary covers {month_name}.</li>
-        <li>Please issue your invoice for the <strong>Total Before Advance (Invoice Amount)</strong>.</li>
-        <li><strong>Invoice must be in PDF format</strong> when submitting to <strong>{invoice_email}</strong>.</li>
-        <li>Payment will be processed according to the usual schedule, after you submit the invoice.</li>
-        <li>If you have questions about your payment, please contact the Management Team before submitting the invoice.</li>
-      </ul>
-    </div>
+{important_notes_html}
 
     <p>Thank you for your hard work and dedication! 🌟</p>
   </div>
@@ -552,6 +605,7 @@ class EmailClient:
         shop_name: str,
         results: Dict[str, Dict],
         month_name: str = None,
+        employees_config: Optional[Dict[str, Dict]] = None,
     ) -> str:
         """
         Create a consolidated HTML email with all employee breakdowns for management approval.
@@ -560,6 +614,7 @@ class EmailClient:
             shop_name: Name of the shop
             results: Dict mapping employee_name -> {'summary': {...}, 'daily': [...]}
             month_name: Optional month label (e.g. "January 2025")
+            employees_config: Optional per-employee config (e.g. \"employment\" from Airtable)
             
         Returns:
             HTML email content
@@ -582,9 +637,14 @@ class EmailClient:
         summary_rows = []
         for emp_name, emp_data in results.items():
             s = emp_data.get('summary', {})
+            emp_display = "—"
+            if employees_config:
+                raw_e = (employees_config.get(emp_name) or {}).get("employment")
+                emp_display = str(raw_e).strip() if raw_e not in (None, "") else "—"
             summary_rows.append(f"""
                 <tr>
                     <td>{emp_name}</td>
+                    <td>{emp_display}</td>
                     <td class="currency">{s.get('WorkedDays', 0)}</td>
                     <td class="currency">{s.get('WorkedHours', 0):.2f}</td>
                     <td class="currency">{self.format_currency(s.get('Sales', 0))}</td>
@@ -630,6 +690,7 @@ class EmailClient:
                 <table>
                     <tr>
                         <th>Employee</th>
+                        <th>Employment</th>
                         <th class="currency">Days</th>
                         <th class="currency">Hours</th>
                         <th class="currency">Sales</th>
@@ -647,10 +708,16 @@ class EmailClient:
             summary = emp_data.get('summary', {})
             daily = emp_data.get('daily', [])
             bonus_breakdown = summary.get('BonusBreakdown', {})
+            emp_note = ""
+            if employees_config:
+                raw_e = (employees_config.get(emp_name) or {}).get("employment")
+                emp_label = str(raw_e).strip() if raw_e not in (None, "") else "— (unassigned)"
+                emp_note = f'<p style="margin-top:4px;color:#555;"><strong>Employment:</strong> {emp_label}</p>'
             
             html += f"""
                 <div class="employee-section">
                     <h2>{emp_name}</h2>
+                    {emp_note}
                     <div class="summary-section">
                         <h3>Summary</h3>
                         <table>

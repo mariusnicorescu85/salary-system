@@ -616,10 +616,12 @@ def _load_employee_config_from_airtable(
         else:
             hourly_rate = 0
         
+        emp_eng = rec.get("Employment") or rec.get("employment")
         emp = {
             "payment_type": rec.get("Payment Type") or "hourly_only",
             "hourly_rate": hourly_rate,
             "email": (rec.get("Email") or rec.get("email") or ""),
+            "employment": str(emp_eng).strip() if emp_eng not in (None, "") else "",
         }
         
         # Date of Birth - used for UK wage bracket when no hourly rate override
@@ -1052,7 +1054,7 @@ def _render_employees_tab(client, base_id, tables_cfg, shop_display, shop_option
     except Exception as e:
         st.error(f"❌ Failed to load: {e}")
         records = []
-    editable_cols = ["Name", "Shop", "Date of Birth", "Email", "Payment Type", "Hourly Rate Override", "Commission Rate", "Base Monthly Amount", "Base Reference Days", "Shop Commission Rate", "Daily Transport", "Rent", "Advance", "Employment Status"]
+    editable_cols = ["Name", "Shop", "Date of Birth", "Email", "Payment Type", "Hourly Rate Override", "Commission Rate", "Base Monthly Amount", "Base Reference Days", "Shop Commission Rate", "Daily Transport", "Rent", "Advance", "Employment", "Employment Status"]
     num_cols = ("Hourly Rate Override", "Commission Rate", "Daily Transport", "Rent", "Advance")
     # Build canonical -> actual Airtable field name mapping (Airtable is case-sensitive)
     col_to_airtable = {}
@@ -1078,6 +1080,8 @@ def _render_employees_tab(client, base_id, tables_cfg, shop_display, shop_option
                 # Employment Status must be in SelectboxColumn options or edits won't save
                 if col == "Employment Status":
                     row[col] = raw if raw in ("Active", "Inactive") else ("Inactive" if raw.lower() == "inactive" else "Active")
+                elif col == "Employment":
+                    row[col] = raw if raw in ("", "Consultancy", "Payroll") else raw
                 else:
                     row[col] = raw
             rows.append(row)
@@ -1094,6 +1098,11 @@ def _render_employees_tab(client, base_id, tables_cfg, shop_display, shop_option
             "Daily Transport": st.column_config.NumberColumn("Daily Transport", format="%.2f"),
             "Rent": st.column_config.NumberColumn("Rent", format="%.2f"),
             "Advance": st.column_config.NumberColumn("Advance", format="%.2f"),
+            "Employment": st.column_config.SelectboxColumn(
+                "Employment",
+                options=["", "Consultancy", "Payroll"],
+                help="Consultancy / Payroll (invoice emails); blank = same as Consultancy",
+            ),
             "Employment Status": st.column_config.SelectboxColumn("Employment Status", options=["Active", "Inactive"]),
         }
         edited = st.data_editor(edit_df, column_config=col_config, width="stretch", num_rows="fixed", key="dm_emp_editor")
@@ -1149,6 +1158,12 @@ def _render_employees_tab(client, base_id, tables_cfg, shop_display, shop_option
                     sh = st.multiselect("Shop", shop_options, key="dm_emp_sh")
                     pt = st.selectbox("Payment Type", payment_types, key="dm_emp_pt")
                     sts = st.selectbox("Employment Status", ["Active", "Inactive"], key="dm_emp_sts")
+                    eng = st.selectbox(
+                        "Employment (invoice vs payroll email)",
+                        ["", "Consultancy", "Payroll"],
+                        format_func=lambda x: "—" if x == "" else x,
+                        key="dm_emp_eng",
+                    )
                 with n2:
                     hr = st.number_input("Hourly Rate", value=0.0, step=0.01, format="%.2f", key="dm_emp_hr")
                     cr = st.number_input("Commission Rate", value=0.0, step=0.01, format="%.2f", key="dm_emp_cr")
@@ -1156,6 +1171,8 @@ def _render_employees_tab(client, base_id, tables_cfg, shop_display, shop_option
                 if st.form_submit_button("Add"):
                     if na and na.strip() and sh:
                         flds = {"Name": na.strip(), "Shop": sh, "Payment Type": pt, "Employment Status": sts}
+                        if eng:
+                            flds["Employment"] = eng
                         if em.strip(): flds["Email"] = em.strip()
                         if dob: flds["Date of Birth"] = dob.strftime("%Y-%m-%d")
                         if hr: flds["Hourly Rate Override"] = hr
