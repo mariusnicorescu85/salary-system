@@ -405,7 +405,11 @@ def render(config):
 
             col_mgmt1, col_mgmt2 = st.columns(2)
             with col_mgmt1:
-                if st.button("Send consolidated breakdown (one email for approval)", key="send_management_consolidated"):
+                if st.button(
+                    "Send consolidated breakdown (one email for approval)",
+                    key="send_management_consolidated",
+                    help="One email to management with each employee's full staff-style breakdown (same as they will receive).",
+                ):
                     recipients = [e.strip() for e in management_recipients_input.split(",") if e.strip()]
                     if not recipients:
                         st.error("Please provide at least one management recipient email.")
@@ -417,10 +421,13 @@ def render(config):
                         except ValueError as e:
                             st.error(f"Email not configured: {e}")
                         else:
+                            mgmt_shop_name = current_shop_config.get('name', 'Shop')
+                            mgmt_invoice_email = email_config.get('invoice_submission_email', default_from_email)
                             html_content = email_client.create_management_approval_email(
-                                shop_name=current_shop_config.get('name', 'Shop'),
+                                shop_name=mgmt_shop_name,
                                 results=results,
                                 employees_config=employees_config,
+                                invoice_submission_email=mgmt_invoice_email,
                             )
                             subject = f"{current_shop_config.get('name', 'Shop')} - Salary Breakdowns for Approval"
                             sent = 0
@@ -437,7 +444,11 @@ def render(config):
                             else:
                                 st.error("Failed to send email. Check email configuration and server logs.")
             with col_mgmt2:
-                if st.button("Send each breakdown separately (one email per employee)", key="send_management_emails"):
+                if st.button(
+                    "Send each breakdown separately (one email per employee)",
+                    key="send_management_emails",
+                    help="Same staff-style breakdown as above, but one email per employee per management recipient.",
+                ):
                     recipients = [e.strip() for e in management_recipients_input.split(",") if e.strip()]
                     if not recipients:
                         st.error("Please provide at least one management recipient email.")
