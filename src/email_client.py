@@ -55,6 +55,29 @@ def _extract_html_body(html: str) -> str:
     return match.group(1).strip() if match else html
 
 
+def _to_float(value, default: float = 0.0) -> float:
+    """Coerce Airtable/JSON values (often strings) to float for email math and comparisons."""
+    if value is None or value == "":
+        return default
+    if isinstance(value, bool):
+        return float(value)
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value.replace(",", "").strip())
+        except (ValueError, TypeError):
+            return default
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _is_positive(value) -> bool:
+    return _to_float(value) > 0
+
+
 _STAFF_BREAKDOWN_EMAIL_STYLES = """
   body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 800px; margin: 0 auto; }
   .header { background: linear-gradient(135deg,#ff6b6b 0%,#ff8e53 100%); color: #fff; padding: 20px; border-radius: 8px 8px 0 0; }
@@ -104,9 +127,9 @@ class EmailClient:
                 "or pass smtp_user and smtp_password parameters."
             )
     
-    def format_currency(self, value: float) -> str:
+    def format_currency(self, value) -> str:
         """Format value as currency"""
-        return f"£{value:,.2f}"
+        return f"£{_to_float(value):,.2f}"
     
     def create_breakdown_email(self, employee_name: str, summary: Dict, 
                               daily_records: List[Dict], employee_email: str,
@@ -135,7 +158,8 @@ class EmailClient:
         month_name = "Month"
         if daily_records:
             try:
-                date_obj = datetime.strptime(daily_records[0]['Date'], '%Y-%m-%d')
+                date_raw = str(daily_records[0].get('Date', ''))[:10]
+                date_obj = datetime.strptime(date_raw, '%Y-%m-%d')
                 month_name = date_obj.strftime('%B %Y')
             except Exception:
                 pass
@@ -177,7 +201,7 @@ class EmailClient:
                     <table>
                         <tr><th>Field</th><th class="currency">Value</th></tr>
                         <tr><td>Worked Days</td><td class="currency">{summary.get('WorkedDays', 0)}</td></tr>
-                        <tr><td>Worked Hours</td><td class="currency">{summary.get('WorkedHours', 0):.2f}</td></tr>
+                        <tr><td>Worked Hours</td><td class="currency">{_to_float(summary.get('WorkedHours', 0)):.2f}</td></tr>
                         <tr><td>Sales</td><td class="currency">{self.format_currency(summary.get('Sales', 0))}</td></tr>
                         <tr><td>Additional Sales</td><td class="currency">{self.format_currency(summary.get('AddlSales', 0))}</td></tr>
                         <tr><td>Adjusted Sales</td><td class="currency">{self.format_currency(summary.get('AdjustedSales', 0))}</td></tr>
@@ -197,7 +221,7 @@ class EmailClient:
                 date_to = period.get('date_to', '')
                 label = f"{date_from} to {date_to}" if date_from != date_to else date_from
                 html += f"""
-                        <tr><td style="padding-left: 12px;">Period {i} ({label})</td><td class="currency">{period.get('hours', 0):.2f} hrs × {self.format_currency(period.get('rate', 0))} = {self.format_currency(period.get('pay', 0))}</td></tr>
+                        <tr><td style="padding-left: 12px;">Period {i} ({label})</td><td class="currency">{_to_float(period.get('hours', 0)):.2f} hrs × {self.format_currency(period.get('rate', 0))} = {self.format_currency(period.get('pay', 0))}</td></tr>
         """
         html += """
                     </table>
@@ -220,7 +244,7 @@ class EmailClient:
             ('ExtraBonus', 'Extra Bonus'),
             ('DailyAllowance', 'Daily Allowance'),
         ]:
-            if bonus_breakdown.get(key, 0) > 0:
+            if _is_positive(bonus_breakdown.get(key, 0)):
                 html += f'<tr><td>{label}</td><td class="currency">{self.format_currency(bonus_breakdown[key])}</td></tr>'
         
         html += f"""
@@ -232,22 +256,22 @@ class EmailClient:
                     <table>
         """
         
-        if summary.get('TotalCommission', 0) > 0:
+        if _is_positive(summary.get('TotalCommission', 0)):
             html += f'<tr><td>Total Commission</td><td class="currency">{self.format_currency(summary.get("TotalCommission", 0))}</td></tr>'
         
-        if summary.get('ManualHours', 0) > 0:
-            html += f'<tr><td>Manual Hours</td><td class="currency">{summary.get("ManualHours", 0):.2f}</td></tr>'
+        if _is_positive(summary.get('ManualHours', 0)):
+            html += f'<tr><td>Manual Hours</td><td class="currency">{_to_float(summary.get("ManualHours", 0)):.2f}</td></tr>'
             html += f'<tr><td>Manual Hours Pay</td><td class="currency">{self.format_currency(summary.get("ManualHoursPay", 0))}</td></tr>'
         
-        if summary.get('Deductions', 0) > 0:
+        if _is_positive(summary.get('Deductions', 0)):
             html += f'<tr><td>Deductions</td><td class="currency">-{self.format_currency(summary.get("Deductions", 0))}</td></tr>'
         
-        if summary.get('Rent', 0) > 0:
+        if _is_positive(summary.get('Rent', 0)):
             pt = (summary.get('PaymentType') or '').lower()
             rent_fmt = self.format_currency(summary.get("Rent", 0))
             html += f'<tr><td>Rent</td><td class="currency">{"" if pt == "alex_hybrid" else "-"}{rent_fmt}</td></tr>'
         
-        if summary.get('Advance', 0) > 0:
+        if _is_positive(summary.get('Advance', 0)):
             html += f'<tr><td>Advance</td><td class="currency">-{self.format_currency(summary.get("Advance", 0))}</td></tr>'
         
         html += f"""
@@ -271,7 +295,7 @@ class EmailClient:
             html += f"""
                     <tr>
                         <td>{record.get('Date', '')}</td>
-                        <td class="currency">{record.get('Hours', 0):.2f}</td>
+                        <td class="currency">{_to_float(record.get('Hours', 0)):.2f}</td>
                         <td class="currency">{self.format_currency(record.get('Sales', 0))}</td>
                         <td class="currency">{self.format_currency(record.get('AddlSales', 0))}</td>
                         <td class="currency">{self.format_currency(record.get('Base', 0))}</td>
@@ -370,13 +394,13 @@ class EmailClient:
             "flat_rate_tiered_commission_with_transport", "net_commission_tiered", "alex_hybrid",
         )
         
-        advance = abs(summary.get('Advance', 0) or 0)
-        final_pay = summary.get('FinalPayment', 0) or 0
+        advance = abs(_to_float(summary.get('Advance', 0)))
+        final_pay = _to_float(summary.get('FinalPayment', 0))
         total_before_advance = final_pay + advance
         
-        hours_salary = summary.get('HoursSalary', 0) or 0
-        total_bonus = summary.get('TotalBonus', 0) or 0
-        total_commission = summary.get('TotalCommission', 0) or 0
+        hours_salary = _to_float(summary.get('HoursSalary', 0))
+        total_bonus = _to_float(summary.get('TotalBonus', 0))
+        total_commission = _to_float(summary.get('TotalCommission', 0))
         hours_plus_bonus = hours_salary + total_bonus
         
         # Build bonus breakdown rows
@@ -392,10 +416,10 @@ class EmailClient:
             ('ExtraBonus', 'Extra Bonus'),
             ('DailyAllowance', 'Daily Allowance'),
         ]:
-            if bonus_breakdown.get(key, 0) > 0:
+            if _is_positive(bonus_breakdown.get(key, 0)):
                 bonus_detail_rows += f'<tr><td style="padding-left: 20px;"><em>{label}:</em></td><td class="amount">{self.format_currency(bonus_breakdown[key])}</td></tr>'
         
-        if summary.get('ManualHours', 0) > 0:
+        if _is_positive(summary.get('ManualHours', 0)):
             bonus_detail_rows += f'<tr><td style="padding-left: 20px;"><em>Manual Hours:</em></td><td class="amount">{self.format_currency(summary.get("ManualHoursPay", 0))}</td></tr>'
         
         if bonus_detail_rows:
@@ -411,7 +435,7 @@ class EmailClient:
         if wage_breakdown:
             rows = "".join(
                 f'<tr><td style="padding-left: 20px;"><em>{p.get("date_from", "")} to {p.get("date_to", "")}:</em></td>'
-                f'<td class="amount">{p.get("hours", 0):.2f} hrs × {self.format_currency(p.get("rate", 0))} = {self.format_currency(p.get("pay", 0))}</td></tr>'
+                f'<td class="amount">{_to_float(p.get("hours", 0)):.2f} hrs × {self.format_currency(p.get("rate", 0))} = {self.format_currency(p.get("pay", 0))}</td></tr>'
                 for p in wage_breakdown
             )
             wage_breakdown_html = f'<tr style="background: #f5f5f5; font-weight: bold; border-top: 2px solid #9e9e9e;"><td colspan="2" style="padding: 12px 8px;">📋 Wage Bracket Breakdown (rate varied mid-month)</td></tr>{rows}'
@@ -425,7 +449,7 @@ class EmailClient:
             dave_detail_rows = self._html_dave_package_breakdown_rows(summary, daily_records)
         
         # Deductions row
-        deductions = summary.get('Deductions', 0) or 0
+        deductions = _to_float(summary.get('Deductions', 0))
         deductions_html = ""
         if deductions != 0:
             deductions_html = f"""<tr style="background: #fff3e0; font-weight: bold; border-top: 2px solid #ff9800;">
@@ -433,10 +457,7 @@ class EmailClient:
             </tr>
             <tr><td style="padding-left: 20px;"><em>Deductions:</em></td><td class="amount" style="color: #d32f2f;">-{self.format_currency(abs(deductions))}</td></tr>"""
 
-        try:
-            rent_amt = float(summary.get("Rent", 0) or 0)
-        except (TypeError, ValueError):
-            rent_amt = 0.0
+        rent_amt = _to_float(summary.get("Rent", 0))
         rent_html = ""
         if rent_amt != 0:
             if pt_key == "alex_hybrid":
@@ -454,12 +475,12 @@ class EmailClient:
         if is_commission:
             mid_row = f'<tr><td><strong>Total commission{(" (personal + shop)" if pt_key == "dave_package" else "")}:</strong></td><td class="amount">{self.format_currency(total_commission)}</td></tr>'
         else:
-            mid_row = f'<tr><td><strong>Hours + Bonus:</strong></td><td class="amount">{self.format_currency(hours_plus_bonus)}</td></tr>' if total_bonus > 0 else ''
+            mid_row = f'<tr><td><strong>Hours + Bonus:</strong></td><td class="amount">{self.format_currency(hours_plus_bonus)}</td></tr>' if _is_positive(total_bonus) else ''
         
         # Daily table - hourly: Date, Hours, Sales, Daily Pay (Base); commission: Date, Hours, Sales, Addl Sales, Commission
         if is_commission:
             daily_rows = "".join(
-                f'<tr><td class="left">{r.get("Date", "")}</td><td>{r.get("Hours", 0):.2f}</td>'
+                f'<tr><td class="left">{r.get("Date", "")}</td><td>{_to_float(r.get("Hours", 0)):.2f}</td>'
                 f'<td>{self.format_currency(r.get("Sales", 0))}</td><td>{self.format_currency(r.get("AddlSales", 0))}</td>'
                 f'<td class="amount">{self.format_currency(r.get("Commission", 0))}</td></tr>'
                 for r in daily_records
@@ -472,7 +493,7 @@ class EmailClient:
             commission_badge = '<span class="commission-badge">COMMISSION</span>' if pt_key != "dave_package" else '<span class="commission-badge">PACKAGE PAY</span>'
         else:
             daily_rows = "".join(
-                f'<tr><td class="left">{r.get("Date", "")}</td><td>{r.get("Hours", 0):.2f}</td>'
+                f'<tr><td class="left">{r.get("Date", "")}</td><td>{_to_float(r.get("Hours", 0)):.2f}</td>'
                 f'<td>{self.format_currency(r.get("Sales", 0))}</td><td class="amount">{self.format_currency(r.get("Base", 0))}</td></tr>'
                 for r in daily_records
             )
@@ -490,7 +511,7 @@ class EmailClient:
     Many thanks,<br>
     Mirela
   </p>"""
-            if advance > 0:
+            if _is_positive(advance):
                 advance_rows_html = (
                     f'<tr><td><strong>Total Before Advance (Invoice Amount):</strong></td>'
                     f'<td class="amount">{self.format_currency(total_before_advance)}</td></tr>'
@@ -525,7 +546,7 @@ class EmailClient:
     Many thanks,<br>
     Mirela
   </p>"""
-            if advance > 0:
+            if _is_positive(advance):
                 advance_rows_html = (
                     f'<tr><td><strong>Total Before Advance:</strong></td>'
                     f'<td class="amount">{self.format_currency(total_before_advance)}</td></tr>'
@@ -583,7 +604,7 @@ class EmailClient:
       <h3>📊 Monthly Overview</h3>
       <table>
         <tr><td><strong>Days Worked:</strong></td><td class="amount">{summary.get('WorkedDays', 0)} days</td></tr>
-        <tr><td><strong>Total Hours:</strong></td><td class="amount">{summary.get('WorkedHours', 0):.2f} hours</td></tr>
+        <tr><td><strong>Total Hours:</strong></td><td class="amount">{_to_float(summary.get('WorkedHours', 0)):.2f} hours</td></tr>
         {hourly_rate_row}
         <tr><td><strong>{salary_row_label}</strong></td><td class="amount">{self.format_currency(hours_salary)}</td></tr>
         {dave_detail_rows}
@@ -650,7 +671,8 @@ class EmailClient:
         daily_records = first_emp_data.get('daily', [])
         if not month_name and daily_records:
             try:
-                date_obj = datetime.strptime(daily_records[0]['Date'], '%Y-%m-%d')
+                date_raw = str(daily_records[0].get('Date', ''))[:10]
+                date_obj = datetime.strptime(date_raw, '%Y-%m-%d')
                 month_name = date_obj.strftime('%B %Y')
             except Exception:
                 month_name = "Month"
