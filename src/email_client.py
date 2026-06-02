@@ -78,6 +78,41 @@ def _is_positive(value) -> bool:
     return _to_float(value) > 0
 
 
+def _normalize_summary(summary: Optional[Dict]) -> Dict:
+    """Ensure summary dict for email templates (Airtable/JSON may omit keys or use null)."""
+    if not isinstance(summary, dict):
+        return {}
+    out = dict(summary)
+    bb = out.get("BonusBreakdown")
+    if not isinstance(bb, dict):
+        out["BonusBreakdown"] = {}
+    return out
+
+
+def _normalize_daily_records(daily_records) -> List[Dict]:
+    """Ensure daily rows are a list (key present with null breaks .get('daily', []))."""
+    if daily_records is None:
+        return []
+    if isinstance(daily_records, list):
+        return daily_records
+    return []
+
+
+def _lookup_employee_config(employees_config: Optional[Dict], emp_name: str) -> Dict:
+    """Resolve per-employee config (flat or nested under 'employees')."""
+    if not isinstance(employees_config, dict):
+        return {}
+    info = employees_config.get(emp_name)
+    if isinstance(info, dict):
+        return info
+    nested = employees_config.get("employees")
+    if isinstance(nested, dict):
+        info = nested.get(emp_name)
+        if isinstance(info, dict):
+            return info
+    return {}
+
+
 _STAFF_BREAKDOWN_EMAIL_STYLES = """
   body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 800px; margin: 0 auto; }
   .header { background: linear-gradient(135deg,#ff6b6b 0%,#ff8e53 100%); color: #fff; padding: 20px; border-radius: 8px 8px 0 0; }
@@ -152,7 +187,9 @@ class EmailClient:
         Returns:
             HTML email content
         """
-        bonus_breakdown = summary.get('BonusBreakdown', {})
+        summary = _normalize_summary(summary)
+        daily_records = _normalize_daily_records(daily_records)
+        bonus_breakdown = summary.get("BonusBreakdown") or {}
         
         # Get month name from first record
         month_name = "Month"
@@ -314,25 +351,27 @@ class EmailClient:
 
     def _html_dave_package_breakdown_rows(self, summary: Dict[str, Any], daily_records: List[Dict]) -> str:
         """Monthly Overview HTML rows for dave_package. Fills gaps when summary JSON omits breakdown keys."""
+        daily_records = _normalize_daily_records(daily_records)
+
         def _fkey(key: str):
             v = summary.get(key)
             if v is None or v == "":
                 return None
             try:
-                return float(v)
+                return _to_float(v)
             except (TypeError, ValueError):
                 return None
 
         personal = _fkey("PersonalCommission")
         if personal is None:
-            personal = sum(float(r.get("Commission", 0) or 0) for r in daily_records)
+            personal = sum(_to_float(r.get("Commission", 0)) for r in daily_records)
 
         tc = _fkey("TotalCommission")
         if tc is None:
             tc = 0.0
         shop_comm = _fkey("ShopRangeCommission")
         if shop_comm is None:
-            shop_comm = max(0.0, round(float(tc) - float(personal), 2))
+            shop_comm = max(0.0, round(tc - personal, 2))
 
         shop_gross = _fkey("ShopRangeSalesGross")
         if shop_gross is None and shop_comm:
@@ -346,7 +385,7 @@ class EmailClient:
             dates = sorted({
                 str(r.get("Date", ""))[:10]
                 for r in daily_records
-                if float(r.get("Hours", 0) or 0) > 0.001 and r.get("Date")
+                if _to_float(r.get("Hours", 0)) > 0.001 and r.get("Date")
             })
             if dates:
                 d0, d1 = dates[0], dates[-1]
@@ -667,8 +706,8 @@ class EmailClient:
         if not results:
             return ""
 
-        first_emp_data = next(iter(results.values()))
-        daily_records = first_emp_data.get('daily', [])
+        first_emp_data = next(iter(results.values())) or {}
+        daily_records = _normalize_daily_records(first_emp_data.get("daily"))
         if not month_name and daily_records:
             try:
                 date_raw = str(daily_records[0].get('Date', ''))[:10]
@@ -678,25 +717,27 @@ class EmailClient:
                 month_name = "Month"
         month_name = month_name or "Month"
 
-        invoice_email = invoice_submission_email or ""
-        employees_config = employees_config or {}
+        invoice_email = str(invoice_submission_email or "")
         staff_shop_name = shop_name or None
 
         breakdown_sections = []
-        for emp_name in sorted(results.keys()):
-            emp_data = results[emp_name]
-            summary = emp_data.get('summary', {})
-            daily = emp_data.get('daily', [])
-            emp_info = employees_config.get(emp_name, {}) if isinstance(employees_config, dict) else {}
-            staff_html = self.create_breakdown_email(
-                emp_name,
-                summary,
-                daily,
-                emp_info.get('email', ''),
-                shop_name=staff_shop_name,
-                invoice_submission_email=invoice_email,
-                employment=emp_info.get('employment', ''),
-            )
+        for emp_name in sorted(results.keys(), key=lambda n: str(n or "")):
+            emp_data = results[emp_name] or {}
+            summary = _normalize_summary(emp_data.get("summary"))
+            daily = _normalize_daily_records(emp_data.get("daily"))
+            emp_info = _lookup_employee_config(employees_config, emp_name)
+            try:
+                staff_html = self.create_breakdown_email(
+                    emp_name,
+                    summary,
+                    daily,
+                    str(emp_info.get("email") or ""),
+                    shop_name=staff_shop_name,
+                    invoice_submission_email=invoice_email,
+                    employment=emp_info.get("employment", ""),
+                )
+            except Exception as e:
+                raise TypeError(f"Could not build breakdown for {emp_name!r}: {e}") from e
             body_inner = _extract_html_body(staff_html)
             breakdown_sections.append(
                 f'<div class="mgmt-employee-breakdown">{body_inner}</div>'

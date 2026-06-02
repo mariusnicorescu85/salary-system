@@ -423,26 +423,35 @@ def render(config):
                         else:
                             mgmt_shop_name = current_shop_config.get('name', 'Shop')
                             mgmt_invoice_email = email_config.get('invoice_submission_email', default_from_email)
-                            html_content = email_client.create_management_approval_email(
-                                shop_name=mgmt_shop_name,
-                                results=results,
-                                employees_config=employees_config,
-                                invoice_submission_email=mgmt_invoice_email,
-                            )
-                            subject = f"{current_shop_config.get('name', 'Shop')} - Salary Breakdowns for Approval"
-                            sent = 0
-                            for r in recipients:
-                                if email_client.send_email(
-                                    to_email=r,
-                                    subject=subject,
-                                    html_content=html_content,
-                                    from_email=mgmt_from_email_input,
-                                ):
-                                    sent += 1
-                            if sent > 0:
-                                st.success(f"Sent consolidated breakdown to {sent} management recipient(s).")
-                            else:
-                                st.error("Failed to send email. Check email configuration and server logs.")
+                            try:
+                                html_content = email_client.create_management_approval_email(
+                                    shop_name=mgmt_shop_name,
+                                    results=results,
+                                    employees_config=employees_config,
+                                    invoice_submission_email=mgmt_invoice_email,
+                                )
+                            except (TypeError, ValueError) as build_err:
+                                st.error(
+                                    "Could not build the management approval email. "
+                                    "Re-run **Calculate** and try again, or check Streamlit logs for the employee name in the error."
+                                )
+                                st.exception(build_err)
+                                html_content = None
+                            if html_content:
+                                subject = f"{current_shop_config.get('name', 'Shop')} - Salary Breakdowns for Approval"
+                                sent = 0
+                                for r in recipients:
+                                    if email_client.send_email(
+                                        to_email=r,
+                                        subject=subject,
+                                        html_content=html_content,
+                                        from_email=mgmt_from_email_input,
+                                    ):
+                                        sent += 1
+                                if sent > 0:
+                                    st.success(f"Sent consolidated breakdown to {sent} management recipient(s).")
+                                else:
+                                    st.error("Failed to send email. Check email configuration and server logs.")
             with col_mgmt2:
                 if st.button(
                     "Send each breakdown separately (one email per employee)",
