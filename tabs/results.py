@@ -1,7 +1,34 @@
 """Results tab - View calculation results and send emails."""
 
+import inspect
+
 import streamlit as st
 import pandas as pd
+
+
+def _call_management_approval_email(
+    email_client,
+    *,
+    shop_name: str,
+    results: dict,
+    employees_config: dict,
+    invoice_submission_email: str,
+) -> str:
+    """Call EmailClient.create_management_approval_email with only supported kwargs (deploy-safe)."""
+    params = inspect.signature(email_client.create_management_approval_email).parameters
+    kwargs = {"shop_name": shop_name, "results": results}
+    if "employees_config" in params:
+        kwargs["employees_config"] = employees_config
+    if "invoice_submission_email" in params:
+        kwargs["invoice_submission_email"] = invoice_submission_email
+    return email_client.create_management_approval_email(**kwargs)
+
+
+def _call_breakdown_email(email_client, **kwargs) -> str:
+    """Call EmailClient.create_breakdown_email with only supported kwargs (deploy-safe)."""
+    params = inspect.signature(email_client.create_breakdown_email).parameters
+    filtered = {k: v for k, v in kwargs.items() if k in params}
+    return email_client.create_breakdown_email(**filtered)
 
 
 def render(config):
@@ -312,9 +339,14 @@ def render(config):
                         for emp_name, emp_email in staff_with_email:
                             emp_data = results[emp_name]
                             emp_cfg = employees_config.get(emp_name, {}) if isinstance(employees_config, dict) else {}
-                            html_content = email_client.create_breakdown_email(
-                                emp_name, emp_data['summary'], emp_data['daily'], emp_email,
-                                shop_name=shop_name, invoice_submission_email=invoice_email,
+                            html_content = _call_breakdown_email(
+                                email_client,
+                                employee_name=emp_name,
+                                summary=emp_data['summary'],
+                                daily_records=emp_data['daily'],
+                                employee_email=emp_email,
+                                shop_name=shop_name,
+                                invoice_submission_email=invoice_email,
                                 employment=emp_cfg.get("employment", ""),
                             )
                             subject = f"{current_shop_config.get('name', 'Shop')} - Salary Breakdown for {emp_name}"
@@ -362,12 +394,14 @@ def render(config):
                     else:
                         shop_name = current_shop_config.get('name', 'Shop')
                         invoice_email = email_config.get('invoice_submission_email', default_from_email)
-                        html_content = email_client.create_breakdown_email(
-                            selected_employee,
-                            summary,
-                            daily,
-                            employee_email_input,
-                            shop_name=shop_name, invoice_submission_email=invoice_email,
+                        html_content = _call_breakdown_email(
+                            email_client,
+                            employee_name=selected_employee,
+                            summary=summary,
+                            daily_records=daily,
+                            employee_email=employee_email_input,
+                            shop_name=shop_name,
+                            invoice_submission_email=invoice_email,
                             employment=employee_info.get("employment", ""),
                         )
                         subject = f"{current_shop_config.get('name', 'Shop')} - Salary Breakdown for {selected_employee}"
@@ -424,7 +458,8 @@ def render(config):
                             mgmt_shop_name = current_shop_config.get('name', 'Shop')
                             mgmt_invoice_email = email_config.get('invoice_submission_email', default_from_email)
                             try:
-                                html_content = email_client.create_management_approval_email(
+                                html_content = _call_management_approval_email(
+                                    email_client,
                                     shop_name=mgmt_shop_name,
                                     results=results,
                                     employees_config=employees_config,
@@ -433,7 +468,8 @@ def render(config):
                             except (TypeError, ValueError) as build_err:
                                 st.error(
                                     "Could not build the management approval email. "
-                                    "Re-run **Calculate** and try again, or check Streamlit logs for the employee name in the error."
+                                    "If the app was recently updated, redeploy the full project on Streamlit Cloud "
+                                    "(especially **src/email_client.py**). Re-run **Calculate** if daily rows are missing."
                                 )
                                 st.exception(build_err)
                                 html_content = None
@@ -478,12 +514,14 @@ def render(config):
                                 emp_email_addr = emp_info.get('email', '')
                                 mgmt_shop_name = current_shop_config.get('name', 'Shop')
                                 mgmt_invoice_email = email_config.get('invoice_submission_email', default_from_email)
-                                html_content = email_client.create_breakdown_email(
-                                    emp_name,
-                                    emp_summary,
-                                    emp_daily,
-                                    emp_email_addr,
-                                    shop_name=mgmt_shop_name, invoice_submission_email=mgmt_invoice_email,
+                                html_content = _call_breakdown_email(
+                                    email_client,
+                                    employee_name=emp_name,
+                                    summary=emp_summary,
+                                    daily_records=emp_daily,
+                                    employee_email=emp_email_addr,
+                                    shop_name=mgmt_shop_name,
+                                    invoice_submission_email=mgmt_invoice_email,
                                     employment=emp_info.get("employment", ""),
                                 )
                                 subject = f"{current_shop_config.get('name', 'Shop')} - Salary Breakdown for {emp_name}"
