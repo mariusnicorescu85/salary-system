@@ -82,3 +82,5 @@ DEPLOYMENT_CHECKLIST.md
 Dockerfile
 Procfile
 runtime.txt
+
+emails/

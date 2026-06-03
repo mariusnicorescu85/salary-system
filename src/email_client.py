@@ -39,6 +39,16 @@ def _normalize_payment_type_key(payment_type) -> str:
     return pascal.get(key, key)
 
 
+def _invoice_company_name(shop_name: str) -> str:
+    """Legal entity name staff should put on invoices (shop display name may differ)."""
+    key = (shop_name or "").strip().lower()
+    if "pyt" in key:
+        return "PYT Hairstyle Collab"
+    if "opatra" in key:
+        return "Opulent Beauty LTD"
+    return (shop_name or "").strip()
+
+
 def employment_requires_invoice_instructions(employment: Optional[str]) -> bool:
     """Consultancy and unassigned need invoice/PDF instructions; Payroll does not."""
     if employment is None:
@@ -541,6 +551,7 @@ class EmailClient:
             commission_badge = ""
         
         invoice_email = invoice_submission_email or "invoices.opulent@gmail.com"
+        invoice_company = _invoice_company_name(shop_name)
 
         if include_invoice_instructions:
             intro_html = f"""  <p>Hi {employee_name},</p>
@@ -563,8 +574,10 @@ class EmailClient:
       <h3 style="margin-top: 0;">📄 IMPORTANT: Invoice Submission Requirements</h3>
       <ul style="margin: 10px 0;">
         <li><strong style="color: #d32f2f;">Your invoice MUST be submitted in PDF format</strong></li>
+        <li>Issue invoice to: <strong>{invoice_company}</strong></li>
         <li>Invoice amount: <strong>{self.format_currency(total_before_advance)}</strong> (Total Before Advance)</li>
         <li>Send to: <strong>{invoice_email}</strong></li>
+        <li>You do <strong>not</strong> need to include this full breakdown on your invoice — a simple line item with the total amount is enough.</li>
         <li>Please ensure your invoice is a PDF file before sending</li>
       </ul>
     </div>"""
@@ -572,8 +585,9 @@ class EmailClient:
       <h3>📝 Important Notes</h3>
       <ul>
         <li>This summary covers {month_name}.</li>
-        <li>Please issue your invoice for the <strong>Total Before Advance (Invoice Amount)</strong>.</li>
+        <li>Please issue your invoice to <strong>{invoice_company}</strong> for the <strong>Total Before Advance (Invoice Amount)</strong>.</li>
         <li><strong>Invoice must be in PDF format</strong> when submitting to <strong>{invoice_email}</strong>.</li>
+        <li>The full breakdown in this email is for your records only — you do <strong>not</strong> need to reproduce it on your invoice.</li>
         <li>Payment will be processed according to the usual schedule, after you submit the invoice.</li>
         <li>If you have questions about your payment, please contact the Management Team before submitting the invoice.</li>
       </ul>
