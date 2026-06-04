@@ -43,10 +43,20 @@ def _invoice_company_name(shop_name: str) -> str:
     """Legal entity name staff should put on invoices (shop display name may differ)."""
     key = (shop_name or "").strip().lower()
     if "pyt" in key:
-        return "PYT Hairstyle Collab"
+        return "PYT HAIRSTYLE COLLAB LTD"
     if "opatra" in key:
-        return "Opulent Beauty LTD"
+        return "OPULENT BEAUTY LTD"
     return (shop_name or "").strip()
+
+
+def _invoice_company_address(shop_name: str) -> str:
+    """Registered business address for the invoice addressee."""
+    key = (shop_name or "").strip().lower()
+    if "pyt" in key:
+        return "20 Wenlock Road, London, England, N1 7GU"
+    if "opatra" in key:
+        return "129 Station Road, London, England, NW4 4NJ"
+    return ""
 
 
 def employment_requires_invoice_instructions(employment: Optional[str]) -> bool:
@@ -183,7 +193,7 @@ class EmailClient:
         """
         Create HTML email with salary breakdown.
         When shop_name is provided, uses Opatra-style template with gradient header,
-        Mirela signature, optional PDF invoice notice, and Total Before Advance / Advance / Remaining flow.
+        Mirela signature, optional PDF invoice notice, and invoice amount / advance / remaining flow.
         
         Args:
             employee_name: Employee name
@@ -520,7 +530,7 @@ class EmailClient:
                     f'<td class="amount" style="color: #d32f2f;">-{self.format_currency(abs(rent_amt))}</td></tr>'
                 )
         
-        # Hours + Bonus or Commission + Bonus row (for Total Before Advance context)
+        # Hours + Bonus or Commission + Bonus row (feeds invoice amount when advance was paid)
         if is_commission:
             mid_row = f'<tr><td><strong>Total commission{(" (personal + shop)" if pt_key == "dave_package" else "")}:</strong></td><td class="amount">{self.format_currency(total_commission)}</td></tr>'
         else:
@@ -552,6 +562,12 @@ class EmailClient:
         
         invoice_email = invoice_submission_email or "invoices.opulent@gmail.com"
         invoice_company = _invoice_company_name(shop_name)
+        invoice_address = _invoice_company_address(shop_name)
+        invoice_addressee_html = (
+            f"<strong>{invoice_company}</strong><br>{invoice_address}"
+            if invoice_address
+            else f"<strong>{invoice_company}</strong>"
+        )
 
         if include_invoice_instructions:
             intro_html = f"""  <p>Hi {employee_name},</p>
@@ -563,9 +579,9 @@ class EmailClient:
   </p>"""
             if _is_positive(advance):
                 advance_rows_html = (
-                    f'<tr><td><strong>Total Before Advance (Invoice Amount):</strong></td>'
+                    f'<tr><td><strong>Invoice amount:</strong></td>'
                     f'<td class="amount">{self.format_currency(total_before_advance)}</td></tr>'
-                    f'<tr><td><strong>Advance Already Paid:</strong></td>'
+                    f'<tr><td><strong>Advance already paid:</strong></td>'
                     f'<td class="amount">- {self.format_currency(advance)}</td></tr>'
                 )
             else:
@@ -574,10 +590,10 @@ class EmailClient:
       <h3 style="margin-top: 0;">📄 IMPORTANT: Invoice Submission Requirements</h3>
       <ul style="margin: 10px 0;">
         <li><strong style="color: #d32f2f;">Your invoice MUST be submitted in PDF format</strong></li>
-        <li>Issue invoice to: <strong>{invoice_company}</strong></li>
-        <li>Invoice amount: <strong>{self.format_currency(total_before_advance)}</strong> (Total Before Advance)</li>
+        <li>Address your invoice to:<br>{invoice_addressee_html}</li>
+        <li>Invoice amount: <strong>{self.format_currency(total_before_advance)}</strong></li>
         <li>Send to: <strong>{invoice_email}</strong></li>
-        <li>You do <strong>not</strong> need to include this full breakdown on your invoice — a simple line item with the total amount is enough.</li>
+        <li>You do <strong>not</strong> need to attach or copy this full breakdown on your invoice — one line with the total amount is enough.</li>
         <li>Please ensure your invoice is a PDF file before sending</li>
       </ul>
     </div>"""
@@ -585,9 +601,9 @@ class EmailClient:
       <h3>📝 Important Notes</h3>
       <ul>
         <li>This summary covers {month_name}.</li>
-        <li>Please issue your invoice to <strong>{invoice_company}</strong> for the <strong>Total Before Advance (Invoice Amount)</strong>.</li>
+        <li>Please issue your invoice to {invoice_addressee_html} for <strong>{self.format_currency(total_before_advance)}</strong>.</li>
         <li><strong>Invoice must be in PDF format</strong> when submitting to <strong>{invoice_email}</strong>.</li>
-        <li>The full breakdown in this email is for your records only — you do <strong>not</strong> need to reproduce it on your invoice.</li>
+        <li>The detailed breakdown in this email is for your records only — you do <strong>not</strong> need to reproduce it on your invoice.</li>
         <li>Payment will be processed according to the usual schedule, after you submit the invoice.</li>
         <li>If you have questions about your payment, please contact the Management Team before submitting the invoice.</li>
       </ul>
@@ -601,9 +617,9 @@ class EmailClient:
   </p>"""
             if _is_positive(advance):
                 advance_rows_html = (
-                    f'<tr><td><strong>Total Before Advance:</strong></td>'
+                    f'<tr><td><strong>Total earned:</strong></td>'
                     f'<td class="amount">{self.format_currency(total_before_advance)}</td></tr>'
-                    f'<tr><td><strong>Advance Already Paid:</strong></td>'
+                    f'<tr><td><strong>Advance already paid:</strong></td>'
                     f'<td class="amount">- {self.format_currency(advance)}</td></tr>'
                 )
             else:
