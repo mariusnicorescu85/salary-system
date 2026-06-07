@@ -156,6 +156,11 @@ _STAFF_BREAKDOWN_EMAIL_STYLES = """
   .mgmt-approval-banner + .mgmt-employee-breakdown { border-top: none; margin-top: 0; padding-top: 0; }
 """
 
+_PAYMENT_DATE_LINE = "Payment is made on the <strong>10th of each month</strong>."
+_PAYMENT_DATE_LINE_AFTER_INVOICE = (
+    "Payment is made on the <strong>10th of each month</strong>, after you submit your invoice."
+)
+
 
 class EmailClient:
     """Client for sending emails"""
@@ -595,6 +600,7 @@ class EmailClient:
         <li>Send to: <strong>{invoice_email}</strong></li>
         <li>You do <strong>not</strong> need to attach or copy this full breakdown on your invoice — one line with the total amount is enough.</li>
         <li>Please ensure your invoice is a PDF file before sending</li>
+        <li>{_PAYMENT_DATE_LINE_AFTER_INVOICE}</li>
       </ul>
     </div>"""
             important_notes_html = f"""    <div class="summary-box">
@@ -604,7 +610,7 @@ class EmailClient:
         <li>Please issue your invoice to {invoice_addressee_html} for <strong>{self.format_currency(total_before_advance)}</strong>.</li>
         <li><strong>Invoice must be in PDF format</strong> when submitting to <strong>{invoice_email}</strong>.</li>
         <li>The detailed breakdown in this email is for your records only — you do <strong>not</strong> need to reproduce it on your invoice.</li>
-        <li>Payment will be processed according to the usual schedule, after you submit the invoice.</li>
+        <li>{_PAYMENT_DATE_LINE_AFTER_INVOICE}</li>
         <li>If you have questions about your payment, please contact the Management Team before submitting the invoice.</li>
       </ul>
     </div>"""
@@ -629,7 +635,7 @@ class EmailClient:
       <h3>📝 Important Notes</h3>
       <ul>
         <li>This summary covers {month_name}.</li>
-        <li>Payment will be processed according to the usual schedule.</li>
+        <li>{_PAYMENT_DATE_LINE}</li>
         <li>If you have questions about your payment, please contact the Management Team.</li>
       </ul>
     </div>"""
