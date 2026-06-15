@@ -505,6 +505,9 @@ def render(report_file, selected_shop, shop_config, config, append_to_airtable, 
                         summary_row['PersonalCommission'] = summary.get('PersonalCommission', 0)
                         summary_row['ShopRangeFirstDate'] = summary.get('ShopRangeFirstDate', '') or ''
                         summary_row['ShopRangeLastDate'] = summary.get('ShopRangeLastDate', '') or ''
+                    if summary.get('PaymentType') == 'isaac_package':
+                        summary_row['IsaacTransportTotal'] = summary.get('IsaacTransportTotal', 0)
+                        summary_row['SalesMilestoneBonus'] = summary.get('SalesMilestoneBonus', 0)
 
                 # Sort: Daily records first (by Date, then Employee), then Monthly Summary (by Employee)
                 def _sort_key(r):

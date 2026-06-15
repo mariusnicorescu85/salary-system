@@ -32,6 +32,7 @@ def _normalize_payment_type_key(payment_type) -> str:
         "flatratetieredcommission": "flat_rate_tiered_commission",
         "flatratetieredwithtransport": "flat_rate_tiered_commission_with_transport",
         "netcommissiontiered": "net_commission_tiered",
+        "isaacpackage": "isaac_package",
         "alexoldstructure": "alex_hybrid",
         "alexnewstructure": "alex_hybrid",
         "salesonly": "sales_only",
@@ -456,6 +457,7 @@ class EmailClient:
             "commission_only", "dave_package", "tiered_commission", "progressive_tiered_commission",
             "hybrid_daily_max", "molly_commission", "flat_rate_tiered_commission",
             "flat_rate_tiered_commission_with_transport", "net_commission_tiered", "alex_hybrid",
+            "isaac_package",
         )
         
         advance = abs(_to_float(summary.get('Advance', 0)))
@@ -511,6 +513,22 @@ class EmailClient:
         dave_detail_rows = ""
         if pt_key == "dave_package":
             dave_detail_rows = self._html_dave_package_breakdown_rows(summary, daily_records)
+        isaac_detail_rows = ""
+        if pt_key == "isaac_package":
+            transport_total = _to_float(
+                summary.get("IsaacTransportTotal", 0) or bonus_breakdown.get("TransportFuel", 0)
+            )
+            milestone_bonus = _to_float(summary.get("SalesMilestoneBonus", 0))
+            if transport_total > 0:
+                isaac_detail_rows += (
+                    f'<tr><td><strong>Transport (qualifying days):</strong></td>'
+                    f'<td class="amount">{self.format_currency(transport_total)}</td></tr>'
+                )
+            if milestone_bonus > 0:
+                isaac_detail_rows += (
+                    f'<tr><td><strong>Sales milestone bonus:</strong></td>'
+                    f'<td class="amount">{self.format_currency(milestone_bonus)}</td></tr>'
+                )
         
         # Deductions row
         deductions = _to_float(summary.get('Deductions', 0))
@@ -542,7 +560,21 @@ class EmailClient:
             mid_row = f'<tr><td><strong>Hours + Bonus:</strong></td><td class="amount">{self.format_currency(hours_plus_bonus)}</td></tr>' if _is_positive(total_bonus) else ''
         
         # Daily table - hourly: Date, Hours, Sales, Daily Pay (Base); commission: Date, Hours, Sales, Addl Sales, Commission
-        if is_commission:
+        if is_commission and pt_key == "isaac_package":
+            daily_rows = "".join(
+                f'<tr><td class="left">{r.get("Date", "")}</td><td>{_to_float(r.get("Hours", 0)):.2f}</td>'
+                f'<td>{self.format_currency(r.get("Sales", 0))}</td><td>{self.format_currency(r.get("AddlSales", 0))}</td>'
+                f'<td class="amount">{self.format_currency(r.get("Base", 0))}</td>'
+                f'<td class="amount">{self.format_currency(r.get("Commission", 0))}</td></tr>'
+                for r in daily_records
+            )
+            daily_header = (
+                '<tr><th class="left">Date</th><th>Hours</th><th>Sales</th>'
+                '<th>Addl Sales</th><th>Transport</th><th>Commission</th></tr>'
+            )
+            header_title = "Commission Breakdown"
+            commission_badge = '<span class="commission-badge">ISAAC PACKAGE</span>'
+        elif is_commission:
             daily_rows = "".join(
                 f'<tr><td class="left">{r.get("Date", "")}</td><td>{_to_float(r.get("Hours", 0)):.2f}</td>'
                 f'<td>{self.format_currency(r.get("Sales", 0))}</td><td>{self.format_currency(r.get("AddlSales", 0))}</td>'
@@ -683,6 +715,7 @@ class EmailClient:
         {hourly_rate_row}
         <tr><td><strong>{salary_row_label}</strong></td><td class="amount">{self.format_currency(hours_salary)}</td></tr>
         {dave_detail_rows}
+        {isaac_detail_rows}
         {wage_breakdown_html}
         {bonus_section_html}
         {mid_row}

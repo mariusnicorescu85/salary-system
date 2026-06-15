@@ -262,6 +262,7 @@ def render(config):
                 'dave_package', 'commission_only', 'tiered_commission', 'hybrid_daily_max',
                 'molly_commission', 'progressive_tiered_commission', 'flat_rate_tiered_commission',
                 'flat_rate_tiered_commission_with_transport', 'alex_hybrid', 'net_commission_tiered',
+                'isaac_package',
             ):
                 breakdown_data.append(['Total Commission', format_currency(total_comm)])
 
@@ -269,6 +270,10 @@ def render(config):
             transport_val = bonus_breakdown.get('TransportFuel', 0) or 0
             if transport_val > 0:
                 breakdown_data.append(['Transport', format_currency(transport_val)])
+
+            sales_milestone = float(summary.get('SalesMilestoneBonus') or 0)
+            if sales_milestone > 0:
+                breakdown_data.append(['Sales Milestone Bonus', format_currency(sales_milestone)])
 
             if summary.get('TotalBonus', 0) > 0:
                 breakdown_data.append(['Total Bonus', format_currency(summary.get('TotalBonus', 0))])

@@ -28,7 +28,8 @@ def render(selected_shop: str, shop_config: dict, config: dict):
         "hourly_only", "commission_only", "dave_package", "manager", "sales_only",
         "progressive_tiered_commission", "hybrid_daily_max",
         "flat_rate_tiered_commission", "flat_rate_tiered_commission_with_transport",
-        "tiered_commission", "molly_commission", "alex_hybrid", "net_commission_tiered"
+        "tiered_commission", "molly_commission", "alex_hybrid", "net_commission_tiered",
+        "isaac_package",
     ]
 
     if not base_id or not api_key:

@@ -168,6 +168,35 @@ class CalculationEngine:
         # Apply rate to NET sales (80% of total)
         net_sales = total_sales * 0.80
         return net_sales * tier_rate
+
+    def _isaac_daily_transport(self, employee: Dict, sales: float, addl_sales: float) -> float:
+        """£daily_transport when gross sales >= threshold and no same-day refund (negative Sales/AddlSales)."""
+        daily_transport = float(employee.get('daily_transport', 0) or 0)
+        if daily_transport <= 0:
+            return 0.0
+        min_sales_raw = employee.get('transport_min_daily_sales', 400)
+        try:
+            min_sales = float(min_sales_raw)
+        except (TypeError, ValueError):
+            min_sales = 400.0
+        total = sales + addl_sales
+        if total < min_sales:
+            return 0.0
+        disqualify = employee.get('transport_disqualify_if_refund_same_day', True)
+        if disqualify is not False and (sales < 0 or addl_sales < 0):
+            return 0.0
+        return daily_transport
+
+    @staticmethod
+    def _sales_milestone_bonus(employee: Dict, adjusted_sales: float, month_name: str) -> float:
+        """Highest non-cumulative sales bonus tier for the month (from Sales Bonus Thresholds)."""
+        bonuses = employee.get(f"{month_name}_bonuses", [])
+        if not bonuses:
+            return 0.0
+        for bonus_tier in sorted(bonuses, key=lambda x: x.get('sales_threshold', 0), reverse=True):
+            if adjusted_sales >= bonus_tier.get('sales_threshold', 0):
+                return float(bonus_tier.get('bonus_amount', 0) or 0)
+        return 0.0
     
     def calculate_alex_commission(self, total_sales: float, date: str, employee: Dict) -> float:
         """Calculate Alex's commission based on date (old vs new structure)"""
@@ -277,6 +306,16 @@ class CalculationEngine:
             result['Base'] = 0.0
             result['Commission'] = commission
             result['PaymentType'] = 'NetCommissionTiered'
+
+        elif payment_type == 'isaac_package':
+            # Isaac: 30% NET commission + conditional daily transport
+            commission = self.calculate_rebecca_commission(
+                total_sales,
+                employee.get('commission_tiers', [])
+            )
+            result['Base'] = self._isaac_daily_transport(employee, sales, addl_sales)
+            result['Commission'] = commission
+            result['PaymentType'] = 'IsaacPackage'
         
         elif payment_type == 'commission_only':
             # Simple commission only (Codruta, Isaac, Shany)
@@ -436,6 +475,8 @@ class CalculationEngine:
         method = None
         alex_transport = 0.0
         alex_rent = 0.0
+        isaac_transport_total = 0.0
+        isaac_sales_bonus = 0.0
 
         # Optional breakdown for payment_type dave_package (filled in that branch)
         dave_shop_range_sales = 0.0
@@ -459,6 +500,18 @@ class CalculationEngine:
         elif payment_type == 'net_commission_tiered':
             # Rebecca: Commission + manual hours + bonus - deductions
             base_payment = total_commission + manual_hours_pay + total_bonus
+            final_payment = base_payment - deductions - advance
+
+        elif payment_type == 'isaac_package':
+            # Isaac: Commission + daily transport + sales milestone + bonus + manual hours - deductions
+            isaac_transport_total = sum(r.get('Base', 0) or 0 for r in daily_records)
+            record_date = datetime.strptime(daily_records[0]['Date'], '%Y-%m-%d')
+            month_name = record_date.strftime('%B').lower()
+            isaac_sales_bonus = self._sales_milestone_bonus(employee, adjusted_sales, month_name)
+            base_payment = (
+                total_commission + isaac_transport_total + isaac_sales_bonus
+                + total_bonus + manual_hours_pay
+            )
             final_payment = base_payment - deductions - advance
         
         elif payment_type == 'dave_package':
@@ -617,8 +670,12 @@ class CalculationEngine:
             summary_wage_breakdown.sort(key=lambda x: x['date_from'])
         
         # Individual bonus breakdown for detailed view
-        # For alex_hybrid, use employee transport (not Monthly Bonuses); otherwise use bonus_info
-        transport_for_breakdown = alex_transport if payment_type == 'alex_hybrid' else bonus_info.get('transportFuel', 0)
+        if payment_type == 'alex_hybrid':
+            transport_for_breakdown = alex_transport
+        elif payment_type == 'isaac_package':
+            transport_for_breakdown = isaac_transport_total
+        else:
+            transport_for_breakdown = bonus_info.get('transportFuel', 0)
         bonus_breakdown = {
             'DailySalesBonus': bonus_info.get('dailySalesBonus', 0),
             'FirstLastHourBonus': bonus_info.get('firstLastHourBonus', 0),
@@ -671,5 +728,9 @@ class CalculationEngine:
             summary['PersonalCommission'] = round(dave_personal_commission, 2)
             summary['ShopRangeFirstDate'] = dave_range_first
             summary['ShopRangeLastDate'] = dave_range_last
+
+        if payment_type == 'isaac_package':
+            summary['IsaacTransportTotal'] = round(isaac_transport_total, 2)
+            summary['SalesMilestoneBonus'] = round(isaac_sales_bonus, 2)
         
         return summary
