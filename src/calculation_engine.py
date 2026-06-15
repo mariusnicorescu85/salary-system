@@ -170,7 +170,10 @@ class CalculationEngine:
         return net_sales * tier_rate
 
     def _isaac_daily_transport(self, employee: Dict, sales: float, addl_sales: float) -> float:
-        """£daily_transport when gross sales >= threshold and no same-day refund (negative Sales/AddlSales)."""
+        """
+        Daily transport when Sales + positive Add'l Sales >= threshold.
+        Negative Add'l Sales (refunds) are ignored for the threshold — they do not reduce eligibility.
+        """
         daily_transport = float(employee.get('daily_transport', 0) or 0)
         if daily_transport <= 0:
             return 0.0
@@ -179,11 +182,9 @@ class CalculationEngine:
             min_sales = float(min_sales_raw)
         except (TypeError, ValueError):
             min_sales = 400.0
-        total = sales + addl_sales
-        if total < min_sales:
-            return 0.0
-        disqualify = employee.get('transport_disqualify_if_refund_same_day', True)
-        if disqualify is not False and (sales < 0 or addl_sales < 0):
+        positive_addl = max(0.0, float(addl_sales or 0))
+        qualifying_sales = float(sales or 0) + positive_addl
+        if qualifying_sales < min_sales:
             return 0.0
         return daily_transport
 
