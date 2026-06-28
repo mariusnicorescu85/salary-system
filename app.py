@@ -58,6 +58,109 @@ st.set_page_config(
     layout="wide"
 )
 
+def inject_rota_theme():
+    st.markdown(
+        """
+        <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/geist-sans@5.2.8/index.css">
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@24,400,0,0">
+        <style>
+          :root {
+            --background: #f4f4f5;
+            --foreground: #18181b;
+            --text-muted: #71717a;
+            --accent: #4f46e5;
+            --accent-hover: #6366f1;
+            --accent-muted: #eef2ff;
+            --surface: #ffffff;
+            --border: #e4e4e7;
+            --font-sans: "Geist Sans", ui-sans-serif, system-ui, sans-serif;
+          }
+          .stApp {
+            font-family: var(--font-sans) !important;
+            background-color: var(--background) !important;
+            color: var(--foreground) !important;
+          }
+          /* Geist on text — do NOT blanket-apply to all spans (breaks Material icon ligatures). */
+          .stApp h1, .stApp h2, .stApp h3,
+          .stApp p, .stApp label,
+          .stApp [data-testid="stMarkdown"],
+          .stApp [data-testid="stMetric"] {
+            font-family: var(--font-sans) !important;
+          }
+          .stApp .stMarkdown span,
+          .stApp [data-testid="stMetric"] span,
+          .stApp [data-testid="stMarkdownContainer"] span {
+            font-family: var(--font-sans) !important;
+          }
+          /* Restore Streamlit Material Symbols (sidebar collapse, expanders, etc.) */
+          span[data-testid="stIconMaterial"],
+          [data-testid="stIconMaterial"],
+          .stExpander summary [class*="material"],
+          [data-testid="collapsedControl"] span {
+            font-family: "Material Symbols Outlined" !important;
+            font-variation-settings: "FILL" 0, "wght" 400, "GRAD" 0, "opsz" 24 !important;
+          }
+          /* Fallback if icon ligatures still leak as text */
+          [data-testid="collapsedControl"] {
+            font-size: 0;
+          }
+          [data-testid="collapsedControl"]::before {
+            content: "»";
+            font-size: 1.25rem;
+            font-family: var(--font-sans) !important;
+            font-weight: 700;
+            display: inline-block;
+          }
+          .stExpander summary [class*="material"] {
+            font-size: 0 !important;
+            line-height: 0 !important;
+          }
+          .stExpander summary [class*="material"]::before {
+            content: "›";
+            font-size: 1.1rem;
+            font-family: var(--font-sans) !important;
+            font-weight: 700;
+          }
+          [data-testid="stSidebar"] {
+            background-color: var(--surface) !important;
+            border-right: 1px solid var(--border) !important;
+          }
+          [data-testid="stSidebar"] .stMarkdown,
+          [data-testid="stSidebar"] label {
+            color: var(--foreground) !important;
+          }
+          .stButton > button[kind="primary"] {
+            background-color: var(--accent) !important;
+            border-color: var(--accent) !important;
+            color: #ffffff !important;
+            border-radius: 12px !important;
+            font-weight: 600 !important;
+          }
+          .stButton > button[kind="primary"]:hover {
+            background-color: var(--accent-hover) !important;
+            border-color: var(--accent-hover) !important;
+          }
+          .stButton > button[kind="secondary"] {
+            border-radius: 12px !important;
+            border-color: var(--border) !important;
+          }
+          div[data-baseweb="tab-highlight"] {
+            background-color: var(--accent) !important;
+          }
+          div[data-baseweb="tab"] {
+            color: var(--text-muted) !important;
+          }
+          div[data-baseweb="tab"][aria-selected="true"] {
+            color: var(--accent) !important;
+          }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+inject_rota_theme()
+
 # Initialize session state
 if 'calculations_done' not in st.session_state:
     st.session_state.calculations_done = False
@@ -1902,9 +2005,9 @@ def main():
             gap: 0.5rem;
             margin-bottom: 1.25rem;
             padding: 0.75rem 1rem;
-            background: linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%);
+            background: linear-gradient(135deg, #eef2ff 0%, #f4f4f5 100%);
             border-radius: 12px;
-            border: 1px solid #bae6fd;
+            border: 1px solid #e4e4e7;
         }
         .workflow-step {
             display: flex;
@@ -1914,11 +2017,11 @@ def main():
             color: #64748b;
         }
         .workflow-step.active {
-            color: #0369a1;
+            color: #4f46e5;
             font-weight: 600;
         }
         .workflow-step.completed {
-            color: #0ea5e9;
+            color: #6366f1;
         }
         .workflow-arrow {
             color: #94a3b8;

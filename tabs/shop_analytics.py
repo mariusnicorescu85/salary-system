@@ -36,7 +36,7 @@ def render(selected_shop, shop_config, config):
         margin-bottom: 1.25rem;
     }
     .emp-card-header {
-        background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
+        background: linear-gradient(135deg, #4f46e5 0%, #6366f1 100%);
         color: white;
         padding: 0.75rem 1.25rem;
         display: flex;
