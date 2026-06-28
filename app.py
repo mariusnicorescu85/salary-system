@@ -59,7 +59,7 @@ st.set_page_config(
 )
 
 def inject_rota_theme():
-    st.markdown(
+    st.html(
         """
         <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/geist-sans@5.2.8/index.css">
         <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@24,400,0,0">
@@ -76,50 +76,86 @@ def inject_rota_theme():
             --font-sans: "Geist Sans", ui-sans-serif, system-ui, sans-serif;
           }
           .stApp {
-            font-family: var(--font-sans) !important;
+            font-family: var(--font-sans);
             background-color: var(--background) !important;
             color: var(--foreground) !important;
           }
-          /* Geist on text — do NOT blanket-apply to all spans (breaks Material icon ligatures). */
           .stApp h1, .stApp h2, .stApp h3,
           .stApp p, .stApp label,
           .stApp [data-testid="stMarkdown"],
           .stApp [data-testid="stMetric"] {
             font-family: var(--font-sans) !important;
           }
-          .stApp .stMarkdown span,
-          .stApp [data-testid="stMetric"] span,
-          .stApp [data-testid="stMarkdownContainer"] span {
+          .stApp .stMarkdown span:not([data-testid="stIconMaterial"]):not([data-testid="stExpanderIcon"]):not([data-testid="stExpanderIconCheck"]):not([data-testid="stExpanderIconError"]):not([data-testid="stExpanderIconSpinner"]),
+          .stApp [data-testid="stMetric"] span:not([data-testid="stIconMaterial"]):not([data-testid="stExpanderIcon"]) {
             font-family: var(--font-sans) !important;
           }
-          /* Restore Streamlit Material Symbols (sidebar collapse, expanders, etc.) */
-          span[data-testid="stIconMaterial"],
-          [data-testid="stIconMaterial"],
-          .stExpander summary [class*="material"],
-          [data-testid="collapsedControl"] span {
+          .stApp [data-testid="stIconMaterial"],
+          .stApp [data-testid="stExpanderIcon"],
+          .stApp [data-testid="stExpanderIconCheck"],
+          .stApp [data-testid="stExpanderIconError"],
+          .stApp [data-testid="stExpanderIconSpinner"] {
             font-family: "Material Symbols Outlined" !important;
+            font-weight: normal !important;
+            font-style: normal !important;
+            font-feature-settings: "liga" !important;
             font-variation-settings: "FILL" 0, "wght" 400, "GRAD" 0, "opsz" 24 !important;
+            letter-spacing: normal !important;
+            text-transform: none !important;
+            line-height: 1 !important;
+            -webkit-font-smoothing: antialiased !important;
           }
-          /* Fallback if icon ligatures still leak as text */
-          [data-testid="collapsedControl"] {
-            font-size: 0;
-          }
-          [data-testid="collapsedControl"]::before {
-            content: "»";
-            font-size: 1.25rem;
-            font-family: var(--font-sans) !important;
-            font-weight: 700;
-            display: inline-block;
-          }
-          .stExpander summary [class*="material"] {
+          .stApp [data-testid="stExpanderIcon"],
+          .stExpander [data-testid="stIconMaterial"],
+          [data-testid="stExpander"] [data-testid="stIconMaterial"],
+          [data-testid="stSidebarCollapseButton"] [data-testid="stIconMaterial"],
+          [data-testid="stExpandSidebarButton"] [data-testid="stIconMaterial"] {
             font-size: 0 !important;
             line-height: 0 !important;
+            color: transparent !important;
+            position: relative !important;
+            display: inline-block !important;
+            width: 1.15rem !important;
+            height: 1.15rem !important;
+            overflow: hidden !important;
+            vertical-align: middle !important;
           }
-          .stExpander summary [class*="material"]::before {
-            content: "›";
-            font-size: 1.1rem;
+          .stApp [data-testid="stExpanderIcon"]::after,
+          .stExpander [data-testid="stIconMaterial"]::after,
+          [data-testid="stExpander"] [data-testid="stIconMaterial"]::after,
+          [data-testid="stSidebarCollapseButton"] [data-testid="stIconMaterial"]::after,
+          [data-testid="stExpandSidebarButton"] [data-testid="stIconMaterial"]::after {
+            position: absolute !important;
+            left: 0 !important;
+            top: 0 !important;
+            color: #71717a !important;
             font-family: var(--font-sans) !important;
-            font-weight: 700;
+            font-weight: 700 !important;
+            font-size: 1.1rem !important;
+            line-height: 1.15rem !important;
+            display: block !important;
+          }
+          .stExpander summary[aria-expanded="false"] [data-testid="stIconMaterial"]::after,
+          [data-testid="stExpander"] summary[aria-expanded="false"] [data-testid="stIconMaterial"]::after,
+          .stExpander details:not([open]) > summary [data-testid="stIconMaterial"]::after,
+          [data-testid="stExpander"] details:not([open]) > summary [data-testid="stIconMaterial"]::after,
+          .stApp [data-testid="stExpanderIcon"]::after {
+            content: "›" !important;
+          }
+          .stExpander summary[aria-expanded="true"] [data-testid="stIconMaterial"]::after,
+          [data-testid="stExpander"] summary[aria-expanded="true"] [data-testid="stIconMaterial"]::after,
+          .stExpander details[open] > summary [data-testid="stIconMaterial"]::after,
+          [data-testid="stExpander"] details[open] > summary [data-testid="stIconMaterial"]::after,
+          .stExpander details[open] > summary [data-testid="stExpanderIcon"]::after {
+            content: "⌄" !important;
+          }
+          [data-testid="stSidebarCollapseButton"] [data-testid="stIconMaterial"]::after {
+            content: "‹" !important;
+            font-size: 1.25rem !important;
+          }
+          [data-testid="stExpandSidebarButton"] [data-testid="stIconMaterial"]::after {
+            content: "›" !important;
+            font-size: 1.25rem !important;
           }
           [data-testid="stSidebar"] {
             background-color: var(--surface) !important;
@@ -154,8 +190,7 @@ def inject_rota_theme():
             color: var(--accent) !important;
           }
         </style>
-        """,
-        unsafe_allow_html=True,
+        """
     )
 
 
