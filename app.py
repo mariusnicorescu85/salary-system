@@ -157,6 +157,33 @@ def inject_rota_theme():
             content: "›" !important;
             font-size: 1.25rem !important;
           }
+          /* st.file_uploader "Upload" button: icon ligature can render as plain
+             "upload" text on top of the "Upload" label (uploadUpload overlap). */
+          [data-testid="stFileUploader"] button [data-testid="stIconMaterial"] {
+            font-size: 0 !important;
+            line-height: 0 !important;
+            color: transparent !important;
+            position: relative !important;
+            display: inline-block !important;
+            width: 1.125rem !important;
+            height: 1.125rem !important;
+            overflow: hidden !important;
+            vertical-align: middle !important;
+            flex-shrink: 0 !important;
+          }
+          [data-testid="stFileUploader"] button [data-testid="stIconMaterial"]::after {
+            content: "upload" !important;
+            position: absolute !important;
+            left: 0 !important;
+            top: 0 !important;
+            color: inherit !important;
+            font-family: "Material Symbols Outlined" !important;
+            font-weight: normal !important;
+            font-size: 1.125rem !important;
+            line-height: 1.125rem !important;
+            font-feature-settings: "liga" !important;
+            font-variation-settings: "FILL" 0, "wght" 400, "GRAD" 0, "opsz" 24 !important;
+          }
           [data-testid="stSidebar"] {
             background-color: var(--surface) !important;
             border-right: 1px solid var(--border) !important;
