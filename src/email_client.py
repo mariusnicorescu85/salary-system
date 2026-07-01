@@ -45,6 +45,8 @@ def _invoice_company_name(shop_name: str) -> str:
     key = (shop_name or "").strip().lower()
     if "pyt" in key:
         return "PYT HAIRSTYLE COLLAB LTD"
+    if "westfield" in key:
+        return "BEAUTY SHADES LONDON LTD"
     if "opatra" in key:
         return "OPULENT BEAUTY LTD"
     return (shop_name or "").strip()
@@ -55,6 +57,8 @@ def _invoice_company_address(shop_name: str) -> str:
     key = (shop_name or "").strip().lower()
     if "pyt" in key:
         return "20 Wenlock Road, London, England, N1 7GU"
+    if "westfield" in key:
+        return "129 Station Road, Hendon, London, England, NW4 4NJ"
     if "opatra" in key:
         return "129 Station Road, London, England, NW4 4NJ"
     return ""
