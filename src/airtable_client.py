@@ -53,6 +53,19 @@ def _get_employee_field(fields: Dict) -> str:
     return (val or '').strip() if isinstance(val, str) else ''
 
 
+# Payment-type extras that may not exist on every Daily Breakdowns table.
+OPTIONAL_DAILY_BREAKDOWN_FIELDS = frozenset({
+    "IsaacTransportTotal",
+    "SalesMilestoneBonus",
+    "ProratedBasePay",
+    "ShopRangeSalesGross",
+    "ShopRangeCommission",
+    "PersonalCommission",
+    "ShopRangeFirstDate",
+    "ShopRangeLastDate",
+})
+
+
 class AirtableClient:
     """Client for interacting with Airtable"""
     
@@ -70,7 +83,57 @@ class AirtableClient:
                 "or pass api_key parameter."
             )
         self.api = Api(self.api_key)
-    
+        self._table_field_cache: Dict[tuple, Optional[frozenset]] = {}
+
+    def _get_table_field_names(self, base_id: str, table_name: str) -> Optional[frozenset]:
+        """Return Airtable field names for a table, or None if schema lookup fails."""
+        cache_key = (base_id, table_name)
+        if cache_key in self._table_field_cache:
+            return self._table_field_cache[cache_key]
+        try:
+            schema = self.api.base(base_id).schema()
+            for table in schema.tables:
+                if table.name == table_name:
+                    names = frozenset(f.name for f in table.fields)
+                    self._table_field_cache[cache_key] = names
+                    return names
+        except Exception:
+            pass
+        self._table_field_cache[cache_key] = None
+        return None
+
+    def _filter_fields_for_table(self, base_id: str, table_name: str, record: Dict) -> Dict:
+        """Drop fields that are not columns on the target Airtable table."""
+        allowed = self._get_table_field_names(base_id, table_name)
+        out: Dict[str, Any] = {}
+        for key, value in record.items():
+            if key == "Date" and (value == "" or value is None):
+                continue
+            if allowed is not None:
+                if key not in allowed:
+                    continue
+            elif key in OPTIONAL_DAILY_BREAKDOWN_FIELDS:
+                continue
+            out[key] = value
+
+        # Preserve Isaac/dave breakdown in standard columns when optional fields are missing.
+        if allowed is not None:
+            if "IsaacTransportTotal" not in allowed and record.get("IsaacTransportTotal"):
+                if "TransportFuel" in allowed:
+                    out["TransportFuel"] = float(out.get("TransportFuel") or record.get("TransportFuel") or 0) + float(
+                        record.get("IsaacTransportTotal") or 0
+                    )
+            if "SalesMilestoneBonus" not in allowed and record.get("SalesMilestoneBonus"):
+                if "PersonalSalesBonus" in allowed:
+                    out["PersonalSalesBonus"] = float(out.get("PersonalSalesBonus") or record.get("PersonalSalesBonus") or 0) + float(
+                        record.get("SalesMilestoneBonus") or 0
+                    )
+                elif "ExtraBonus" in allowed:
+                    out["ExtraBonus"] = float(out.get("ExtraBonus") or record.get("ExtraBonus") or 0) + float(
+                        record.get("SalesMilestoneBonus") or 0
+                    )
+        return out
+
     def append_records(self, base_id: str, table_name: str, records: List[Dict]) -> Dict:
         """
         Append records to an Airtable table
@@ -85,18 +148,11 @@ class AirtableClient:
         """
         table = self.api.table(base_id, table_name)
         
-        # Transform records to Airtable format
-        airtable_records = []
-        for record in records:
-            airtable_record = {}
-            for key, value in record.items():
-                # Skip empty Date fields (Airtable Date fields don't accept empty strings)
-                if key == 'Date' and (value == '' or value is None):
-                    continue  # Don't include empty Date field
-                # Airtable field names should match your table schema
-                # You may need to adjust field names based on your Airtable setup
-                airtable_record[key] = value
-            airtable_records.append(airtable_record)
+        # Transform records to Airtable format (only fields that exist on the table)
+        airtable_records = [
+            self._filter_fields_for_table(base_id, table_name, record)
+            for record in records
+        ]
         
         # Batch create records (Airtable allows up to 10 records per batch)
         results = []
@@ -332,13 +388,10 @@ class AirtableClient:
                     if record_id:
                         # Prepare update record
                         update_record = {'id': record_id}
-                        fields = {}
-                        for k, v in record.items():
-                            if k != 'RecordType' and k != 'Employee' and k != 'Date':
-                                # Skip empty Date fields
-                                if k == 'Date' and (v == '' or v is None):
-                                    continue
-                                fields[k] = v
+                        fields = self._filter_fields_for_table(base_id, table_name, {
+                            k: v for k, v in record.items()
+                            if k not in ('RecordType', 'Employee', 'Date')
+                        })
                         update_record['fields'] = fields
                         update_batch.append(update_record)
             elif record_type == 'Monthly Summary':
@@ -349,13 +402,10 @@ class AirtableClient:
                     if record_id:
                         # Prepare update record
                         update_record = {'id': record_id}
-                        fields = {}
-                        for k, v in record.items():
-                            if k != 'RecordType' and k != 'Employee' and k != 'Month':
-                                # Skip empty Date fields
-                                if k == 'Date' and (v == '' or v is None):
-                                    continue
-                                fields[k] = v
+                        fields = self._filter_fields_for_table(base_id, table_name, {
+                            k: v for k, v in record.items()
+                            if k not in ('RecordType', 'Employee', 'Month')
+                        })
                         update_record['fields'] = fields
                         update_batch.append(update_record)
         
