@@ -632,23 +632,72 @@ def _load_gdrive_report(file_id: str, filename: str):
         return None
 
 
+def _parse_shop_config_yaml(yaml_text: str, source: str) -> Tuple[Optional[Dict], Optional[str]]:
+    """Parse shops YAML text. Returns (config, error_message)."""
+    if not yaml_text or not str(yaml_text).strip():
+        return None, f"{source}: YAML content is empty."
+    try:
+        config = yaml.safe_load(yaml_text)
+    except yaml.YAMLError as e:
+        return None, f"{source}: invalid YAML — {e}"
+    if not isinstance(config, dict):
+        return None, f"{source}: YAML must be a mapping (dict), not {type(config).__name__}."
+    shops = config.get("shops")
+    if not isinstance(shops, dict) or not shops:
+        hint = ""
+        if isinstance(config.get("westfield"), dict):
+            hint = " Found `westfield` at the top level — indent it under `shops:` (same level as `pyt:` and `opatra:`)."
+        return None, f"{source}: missing or empty `shops:` key.{hint}"
+    return config, None
+
+
+def _load_config_from_secrets() -> Tuple[Optional[Dict], Optional[str]]:
+    """Load shop config from Streamlit secrets [app_config] yaml = '''...'''."""
+    if not hasattr(st, "secrets"):
+        return None, "Streamlit secrets are not available in this environment."
+    try:
+        app_cfg = st.secrets.get("app_config")
+    except Exception as e:
+        return None, f"Could not read Streamlit secrets (check TOML syntax in Settings → Secrets): {e}"
+    if app_cfg is None:
+        return None, "No `[app_config]` section in Streamlit secrets."
+    yaml_text = None
+    if isinstance(app_cfg, dict):
+        yaml_text = app_cfg.get("yaml")
+    else:
+        yaml_text = getattr(app_cfg, "yaml", None)
+    if yaml_text is None:
+        return None, "`[app_config]` exists but `yaml` key is missing. Use: yaml = '''...'''"
+    return _parse_shop_config_yaml(str(yaml_text), "Streamlit secrets [app_config]")
+
+
 @st.cache_data(ttl=60)
 def load_config():
     """Load shop configuration from config/shops.yaml (local) or st.secrets (Streamlit Cloud)."""
     base = Path(__file__).resolve().parent
     for config_path in [base / 'config' / 'shops.yaml', Path('config/shops.yaml')]:
         if config_path.exists():
-            with open(config_path, 'r') as f:
-                return yaml.safe_load(f)
-    # Fallback: Streamlit Cloud - config stored in Secrets (Settings → Secrets)
-    try:
-        if hasattr(st, "secrets") and "app_config" in st.secrets and "yaml" in st.secrets["app_config"]:
-            return yaml.safe_load(st.secrets["app_config"]["yaml"])
-    except Exception:
-        pass
+            try:
+                with open(config_path, 'r', encoding='utf-8') as f:
+                    config, err = _parse_shop_config_yaml(f.read(), str(config_path))
+                if config:
+                    return config
+                logger.warning("Shop config file invalid: %s", err)
+            except OSError as e:
+                logger.warning("Could not read %s: %s", config_path, e)
+
+    config, err = _load_config_from_secrets()
+    if config:
+        return config
+
     st.error(
         "Configuration not found. **Local:** create `config/shops.yaml` (copy from `config/shops.yaml.example`). "
         "**Streamlit Cloud:** add `[app_config]` with `yaml = '''...'''` (your shops.yaml content) in Settings → Secrets."
+    )
+    if err:
+        st.warning(f"**Details:** {err}")
+    st.info(
+        "After updating Secrets on Streamlit Cloud: **☰ → Clear cache → Rerun**, or reboot the app from Manage app."
     )
     return None
 
