@@ -651,16 +651,42 @@ def _parse_shop_config_yaml(yaml_text: str, source: str) -> Tuple[Optional[Dict]
     return config, None
 
 
+def _load_config_from_file(config_path: Path) -> Tuple[Optional[Dict], Optional[str]]:
+    """Load and validate shop config from a YAML file."""
+    if not config_path.exists():
+        return None, None
+    try:
+        with open(config_path, "r", encoding="utf-8") as f:
+            return _parse_shop_config_yaml(f.read(), str(config_path))
+    except OSError as e:
+        return None, f"{config_path}: could not read file — {e}"
+
+
 def _load_config_from_secrets() -> Tuple[Optional[Dict], Optional[str]]:
     """Load shop config from Streamlit secrets [app_config] yaml = '''...'''."""
     if not hasattr(st, "secrets"):
         return None, "Streamlit secrets are not available in this environment."
     try:
-        app_cfg = st.secrets.get("app_config")
+        secrets = st.secrets
     except Exception as e:
         return None, f"Could not read Streamlit secrets (check TOML syntax in Settings → Secrets): {e}"
+
+    app_cfg = None
+    for accessor in (
+        lambda: secrets.get("app_config") if hasattr(secrets, "get") else None,
+        lambda: secrets["app_config"] if "app_config" in secrets else None,
+        lambda: getattr(secrets, "app_config", None),
+    ):
+        try:
+            app_cfg = accessor()
+            if app_cfg is not None:
+                break
+        except Exception:
+            continue
+
     if app_cfg is None:
         return None, "No `[app_config]` section in Streamlit secrets."
+
     yaml_text = None
     if isinstance(app_cfg, dict):
         yaml_text = app_cfg.get("yaml")
@@ -673,31 +699,38 @@ def _load_config_from_secrets() -> Tuple[Optional[Dict], Optional[str]]:
 
 @st.cache_data(ttl=60)
 def load_config():
-    """Load shop configuration from config/shops.yaml (local) or st.secrets (Streamlit Cloud)."""
+    """Load shop config: shops.yaml (local) → shops.deploy.yaml (Cloud) → Secrets [app_config]."""
     base = Path(__file__).resolve().parent
-    for config_path in [base / 'config' / 'shops.yaml', Path('config/shops.yaml')]:
-        if config_path.exists():
-            try:
-                with open(config_path, 'r', encoding='utf-8') as f:
-                    config, err = _parse_shop_config_yaml(f.read(), str(config_path))
-                if config:
-                    return config
-                logger.warning("Shop config file invalid: %s", err)
-            except OSError as e:
-                logger.warning("Could not read %s: %s", config_path, e)
+    errors = []
+    for config_path in [
+        base / "config" / "shops.yaml",
+        Path("config/shops.yaml"),
+        base / "config" / "shops.deploy.yaml",
+        Path("config/shops.deploy.yaml"),
+    ]:
+        config, err = _load_config_from_file(config_path)
+        if config:
+            return config
+        if err:
+            errors.append(err)
+            logger.warning("Shop config invalid: %s", err)
 
     config, err = _load_config_from_secrets()
     if config:
         return config
-
-    st.error(
-        "Configuration not found. **Local:** create `config/shops.yaml` (copy from `config/shops.yaml.example`). "
-        "**Streamlit Cloud:** add `[app_config]` with `yaml = '''...'''` (your shops.yaml content) in Settings → Secrets."
-    )
     if err:
-        st.warning(f"**Details:** {err}")
+        errors.append(err)
+
+    st.error("Configuration not found.")
+    st.markdown(
+        "**Local:** create `config/shops.yaml` (copy from `config/shops.yaml.example`).  \n"
+        "**Streamlit Cloud:** commit `config/shops.deploy.yaml` (recommended), "
+        "or add `[app_config]` with `yaml = '''...'''` in Settings → Secrets."
+    )
+    for detail in errors:
+        st.warning(f"**Details:** {detail}")
     st.info(
-        "After updating Secrets on Streamlit Cloud: **☰ → Clear cache → Rerun**, or reboot the app from Manage app."
+        "After updating config or Secrets: **☰ → Clear cache → Rerun**, or reboot the app from Manage app."
     )
     return None
 
