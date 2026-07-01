@@ -51,7 +51,7 @@ shops:
     airtable_table_name: "Westfield Daily Breakdowns"
     wage_vs_sales_table: "Wage vs Sales"
     email:
-      from_email: "invoices.opulent@gmail.com"
-      invoice_submission_email: "invoices.opulent@gmail.com"
+      from_email: "beautyshadesltd@gmail.com"
+      invoice_submission_email: "beautyshadesltd@gmail.com"
       management_recipients:
         - "codruta.maris@hotmail.com"
