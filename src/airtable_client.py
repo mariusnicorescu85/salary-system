@@ -1108,10 +1108,24 @@ class AirtableClient:
 
     # --- Employee config from Airtable (for running calculations from Airtable instead of YAML) ---
 
+    def _shop_tokens(self, shop_value: Any) -> set:
+        """Parse Shop field (multi-select list or comma-separated text) into shop name tokens."""
+        if shop_value is None or shop_value == "":
+            return set()
+        if isinstance(shop_value, list):
+            return {str(s).strip() for s in shop_value if str(s).strip()}
+        return {t.strip() for t in str(shop_value).split(",") if t.strip()}
+
+    def _record_matches_shop(self, shop_value: Any, shop_display_name: str) -> bool:
+        """True when shop_value includes shop_display_name as a whole shop (not substring)."""
+        if not shop_display_name:
+            return True
+        return shop_display_name in self._shop_tokens(shop_value)
+
     def _shop_filter_formula(self, shop_field: str, shop_esc: str) -> str:
         """Formula to filter by shop. Supports multi-select Shop (array)."""
-        # Exact match — FIND/ARRAYJOIN substring search incorrectly matched
-        # "Opatra" inside "Westfield Opatra".
+        # Exact match for single-value / multi-select membership.
+        # Employee loading uses _record_matches_shop in Python for comma-separated Shop text.
         return f'{{{shop_field}}} = "{shop_esc}"'
 
     def get_employees_for_shop(
@@ -1125,17 +1139,21 @@ class AirtableClient:
         Excludes employees with Employment Status = "Inactive".
         """
         table = self.api.table(base_id, employees_table)
-        shop_esc = (shop_display_name or "").replace('\\', '\\\\').replace('"', '\\"')
         try:
-            rows = table.all(formula=self._shop_filter_formula("Shop", shop_esc))
+            rows = table.all()
         except Exception:
             return []
-        records = [r.get("fields", {}) for r in rows]
-        if active_only:
-            records = [
-                r for r in records
-                if (r.get("Employment Status") or r.get("employment_status") or "").strip().lower() != "inactive"
-            ]
+        records = []
+        for r in rows:
+            fields = r.get("fields", {})
+            shop = fields.get("Shop") or fields.get("shop")
+            if shop_display_name and not self._record_matches_shop(shop, shop_display_name):
+                continue
+            if active_only:
+                status = (fields.get("Employment Status") or fields.get("employment_status") or "").strip().lower()
+                if status == "inactive":
+                    continue
+            records.append(fields)
         return records
 
     def get_commission_tiers_for_shop(
@@ -1213,10 +1231,13 @@ class AirtableClient:
         id_to_name = {}
         try:
             emp_table = self.api.table(base_id, employees_table)
-            shop_esc = (shop_display_name or "").replace('\\', '\\\\').replace('"', '\\"')
-            emp_rows = emp_table.all(formula=self._shop_filter_formula("Shop", shop_esc))
+            emp_rows = emp_table.all()
             for rec in emp_rows:
-                name = (rec.get("fields", {}).get("Name", "") or "").strip()
+                fields = rec.get("fields", {})
+                shop = fields.get("Shop") or fields.get("shop")
+                if shop_display_name and not self._record_matches_shop(shop, shop_display_name):
+                    continue
+                name = (fields.get("Name", "") or "").strip()
                 if name:
                     id_to_name[rec["id"]] = name
         except Exception:
@@ -1415,16 +1436,16 @@ class AirtableClient:
         """
         table = self.api.table(base_id, table_name)
         try:
-            if shop_display_name:
-                shop_esc = (shop_display_name or "").replace('\\', '\\\\').replace('"', '\\"')
-                rows = table.all(formula=self._shop_filter_formula("Shop", shop_esc))
-            else:
-                rows = table.all()
+            rows = table.all()
         except Exception:
             return []
         out = []
         for rec in rows:
             fields = rec.get("fields", {})
+            if shop_display_name:
+                shop = fields.get("Shop") or fields.get("shop")
+                if not self._record_matches_shop(shop, shop_display_name):
+                    continue
             if active_only:
                 status = (fields.get("Employment Status") or fields.get("employment_status") or "").strip().lower()
                 if status == "inactive":
