@@ -1110,7 +1110,9 @@ class AirtableClient:
 
     def _shop_filter_formula(self, shop_field: str, shop_esc: str) -> str:
         """Formula to filter by shop. Supports multi-select Shop (array)."""
-        return f'FIND("{shop_esc}", ARRAYJOIN({{{shop_field}}})) > 0'
+        # Exact match — FIND/ARRAYJOIN substring search incorrectly matched
+        # "Opatra" inside "Westfield Opatra".
+        return f'{{{shop_field}}} = "{shop_esc}"'
 
     def get_employees_for_shop(
         self, base_id: str, employees_table: str, shop_display_name: str,
