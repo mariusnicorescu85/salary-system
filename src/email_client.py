@@ -209,7 +209,7 @@ class EmailClient:
         """
         Create HTML email with salary breakdown.
         When shop_name is provided, uses Opatra-style template with gradient header,
-        Mirela signature, optional PDF invoice notice, and invoice amount / advance / remaining flow.
+        general sign-off, optional PDF invoice notice, and invoice amount / advance / remaining flow.
         
         Args:
             employee_name: Employee name
@@ -615,14 +615,12 @@ class EmailClient:
             if invoice_address
             else f"<strong>{invoice_company}</strong>"
         )
-
         if include_invoice_instructions:
             intro_html = f"""  <p>Hi {employee_name},</p>
   <p>
     Please see below your breakdown, kindly send your invoice <strong>in PDF format</strong> as soon as possible.<br><br>
     No chasing email will be sent, please be responsible.<br><br>
-    Many thanks,<br>
-    Mirela
+    Many thanks.
   </p>"""
             if _is_positive(advance):
                 advance_rows_html = (
@@ -660,8 +658,7 @@ class EmailClient:
             intro_html = f"""  <p>Hi {employee_name},</p>
   <p>
     Please see below your breakdown for {month_name}.<br><br>
-    Many thanks,<br>
-    Mirela
+    Many thanks.
   </p>"""
             if _is_positive(advance):
                 advance_rows_html = (
