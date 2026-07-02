@@ -28,6 +28,36 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Initialize session state before other imports (survives partial deploy/reload failures)
+if 'calculations_done' not in st.session_state:
+    st.session_state.calculations_done = False
+if 'results' not in st.session_state:
+    st.session_state.results = {}
+if 'authentication_status' not in st.session_state:
+    st.session_state.authentication_status = None
+if 'name' not in st.session_state:
+    st.session_state.name = None
+if 'username' not in st.session_state:
+    st.session_state.username = None
+if 'target_approved' not in st.session_state:
+    st.session_state.target_approved = "0"
+if 'target_total_reached' not in st.session_state:
+    st.session_state.target_total_reached = "0"
+if 'target_current_date' not in st.session_state:
+    st.session_state.target_current_date = datetime.today().date()
+if 'daily_target_date' not in st.session_state:
+    st.session_state.daily_target_date = datetime.today().date()
+if 'wage_vs_sales_date' not in st.session_state:
+    st.session_state.wage_vs_sales_date = datetime.today().date()
+if 'wvs_range_start' not in st.session_state:
+    st.session_state.wvs_range_start = datetime.today().date()
+if 'wvs_range_end' not in st.session_state:
+    st.session_state.wvs_range_end = datetime.today().date()
+if 'selected_saved_report' not in st.session_state:
+    st.session_state.selected_saved_report = None
+if 'selected_gdrive_report' not in st.session_state:
+    st.session_state.selected_gdrive_report = None  # {'id': str, 'name': str}
+
 # Import our modules
 from src.calculation_engine import CalculationEngine
 from src.data_processor import DataProcessor
@@ -222,36 +252,6 @@ def inject_rota_theme():
 
 
 inject_rota_theme()
-
-# Initialize session state
-if 'calculations_done' not in st.session_state:
-    st.session_state.calculations_done = False
-if 'results' not in st.session_state:
-    st.session_state.results = {}
-if 'authentication_status' not in st.session_state:
-    st.session_state.authentication_status = None
-if 'name' not in st.session_state:
-    st.session_state.name = None
-if 'username' not in st.session_state:
-    st.session_state.username = None
-if 'target_approved' not in st.session_state:
-    st.session_state.target_approved = "0"
-if 'target_total_reached' not in st.session_state:
-    st.session_state.target_total_reached = "0"
-if 'target_current_date' not in st.session_state:
-    st.session_state.target_current_date = datetime.today().date()
-if 'daily_target_date' not in st.session_state:
-    st.session_state.daily_target_date = datetime.today().date()
-if 'wage_vs_sales_date' not in st.session_state:
-    st.session_state.wage_vs_sales_date = datetime.today().date()
-if 'wvs_range_start' not in st.session_state:
-    st.session_state.wvs_range_start = datetime.today().date()
-if 'wvs_range_end' not in st.session_state:
-    st.session_state.wvs_range_end = datetime.today().date()
-if 'selected_saved_report' not in st.session_state:
-    st.session_state.selected_saved_report = None
-if 'selected_gdrive_report' not in st.session_state:
-    st.session_state.selected_gdrive_report = None  # {'id': str, 'name': str}
 
 # Saved reports directory for persisting uploaded files
 SAVED_REPORTS_DIR = Path("saved_reports")

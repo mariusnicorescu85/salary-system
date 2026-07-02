@@ -565,7 +565,7 @@ def render(report_file, selected_shop, shop_config, config, append_to_airtable, 
                     st.code(traceback.format_exc())
 
     # Airtable export section - shown when calculations done (persists across reruns so Confirm & Append works)
-    if st.session_state.calculations_done and append_to_airtable:
+    if st.session_state.get("calculations_done", False) and append_to_airtable:
         st.markdown("---")
         st.subheader("📤 Quick Airtable Export")
         st.info("💡 For detailed preview and export, go to the **'Airtable Preview'** tab")

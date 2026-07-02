@@ -50,7 +50,7 @@ def render(config):
         return
 
     # Show results for the currently selected shop (like monthly target)
-    if (st.session_state.calculations_done and st.session_state.results and
+    if (st.session_state.get("calculations_done", False) and st.session_state.get("results") and
             st.session_state.get("results_shop_key") == selected_shop):
         results = st.session_state.results
         results_source = "session"

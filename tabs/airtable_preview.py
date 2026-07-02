@@ -10,7 +10,7 @@ def render(shop_config: dict):
     """Render the Airtable Export Preview tab."""
     st.header("📤 Airtable Export Preview")
 
-    if not st.session_state.calculations_done:
+    if not st.session_state.get("calculations_done", False):
         st.info("👆 Go to the **Calculate** tab and run a calculation first to see what will be exported to Airtable")
     else:
         if 'airtable_records' not in st.session_state or not st.session_state.airtable_records:

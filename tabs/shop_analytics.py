@@ -97,7 +97,7 @@ def render(selected_shop, shop_config, config):
     analytics_sub1, analytics_sub2 = st.tabs(["Current Report", "Historical (from Airtable)"])
 
     with analytics_sub1:
-        if not st.session_state.calculations_done:
+        if not st.session_state.get("calculations_done", False):
             st.info("👆 Run a calculation in the **Calculate** tab first. The analytics table will be built from those results.")
         else:
             results = st.session_state.results
