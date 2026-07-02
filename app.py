@@ -836,24 +836,36 @@ def _load_employee_config_from_airtable(
         base_id, tiers_table, emp_table, shop_display_name
     )
     
-    # Fetch name mappings
+    # Fetch name mappings (all aliases for employees in this shop)
     name_mapping = client.get_name_mappings_for_shop(
         base_id, mappings_table, emp_table, shop_display_name
     )
 
-    # Merge per-employee aliases from Employees.Name Mappings (comma-separated report names).
+    # Merge per-employee aliases from Employees.Name Mappings (text or linked records).
     for rec in emp_records:
         emp_name = (rec.get("Name") or "").strip()
         if not emp_name:
             continue
         raw_aliases = rec.get("Name Mappings") or rec.get("name_mappings") or ""
-        aliases = []
-        if isinstance(raw_aliases, str):
-            aliases = [a.strip() for a in raw_aliases.split(",") if a.strip()]
-        elif isinstance(raw_aliases, list):
-            aliases = [str(a).strip() for a in raw_aliases if str(a).strip()]
+        # Lookup-expanded report names when field is a linked-record array
+        for lookup_field in ("Report Name (from Name Mappings)", "Report Name (from Name Mapping)"):
+            lookup_vals = rec.get(lookup_field)
+            if lookup_vals:
+                if isinstance(lookup_vals, list):
+                    for v in lookup_vals:
+                        v = str(v).strip()
+                        if v:
+                            name_mapping[v] = emp_name
+                elif str(lookup_vals).strip():
+                    name_mapping[str(lookup_vals).strip()] = emp_name
+        aliases = client.expand_employee_name_aliases(base_id, mappings_table, raw_aliases)
         for alias in aliases:
-            name_mapping.setdefault(alias, emp_name)
+            name_mapping[alias] = emp_name
+        # Common timesheet pattern: reversed first/last (e.g. Adam Luzon -> Luzon Adam)
+        parts = emp_name.split()
+        if len(parts) == 2:
+            reversed_name = f"{parts[1]} {parts[0]}"
+            name_mapping.setdefault(reversed_name, emp_name)
     
     # Fetch sales bonus thresholds
     sales_bonus_by_emp = client.get_sales_bonus_thresholds_for_shop(

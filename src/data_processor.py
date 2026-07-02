@@ -23,8 +23,26 @@ class DataProcessor:
     def __init__(self, name_mapping: Optional[Dict[str, str]] = None, 
                  exclude_patterns: Optional[List[str]] = None):
         self.name_mapping = name_mapping or {}
+        self._name_mapping_lower = {k.lower(): v for k, v in self.name_mapping.items()}
         self.exclude_patterns = exclude_patterns or []
         self._logged_mappings = set()  # Track which employees have been logged
+    
+    def _normalize_report_name(self, name: str) -> str:
+        """Normalize report employee names before mapping (commas, Employee: prefix, whitespace)."""
+        if not name:
+            return ""
+        cleaned = re.sub(r'^Employee:\s*', '', str(name).strip(), flags=re.IGNORECASE)
+        cleaned = cleaned.replace(',', ' ')
+        cleaned = re.sub(r'\s+', ' ', cleaned).strip()
+        return cleaned
+    
+    def _extract_employee_from_header(self, employee_part: str, second_col: Optional[str] = None) -> str:
+        """Parse employee name from a report section header."""
+        employee_part = self._normalize_report_name(employee_part)
+        if second_col and str(second_col).strip():
+            combined = f"{employee_part} {str(second_col).strip()}".strip()
+            return self._normalize_report_name(combined)
+        return employee_part
     
     def excel_date_to_js_date(self, serial: float) -> str:
         """Convert Excel serial date to ISO date string"""
@@ -106,7 +124,7 @@ class DataProcessor:
         if not original_name or not isinstance(original_name, str):
             return None
         
-        trimmed = original_name.strip()
+        trimmed = self._normalize_report_name(original_name)
         if not trimmed:
             return None
         
@@ -128,8 +146,8 @@ class DataProcessor:
         
         
         # Step 2: Check case-insensitive mapping
-        if lower_trimmed in self.name_mapping:
-            mapped = self.name_mapping[lower_trimmed]
+        if lower_trimmed in self._name_mapping_lower:
+            mapped = self._name_mapping_lower[lower_trimmed]
             if trimmed not in self._logged_mappings:
                 logger.info(f"✅ MAPPED (case-insensitive): '{trimmed}' → '{mapped}'")
                 self._logged_mappings.add(trimmed)
@@ -163,8 +181,8 @@ class DataProcessor:
                     self._logged_mappings.add(trimmed)
                 return mapped
             # Check case-insensitive match
-            if part_lower in self.name_mapping:
-                mapped = self.name_mapping[part_lower]
+            if part_lower in self._name_mapping_lower:
+                mapped = self._name_mapping_lower[part_lower]
                 if trimmed not in self._logged_mappings:
                     logger.info(f"✅ MAPPED (part, case): '{trimmed}' → '{mapped}' (matched part '{part}')")
                     self._logged_mappings.add(trimmed)
@@ -247,13 +265,9 @@ class DataProcessor:
             
             # Check for employee header row (usually has "Employee:" in first column)
             if len(row_values) > 0 and row_values[0] and 'Employee:' in str(row_values[0]):
-                # Extract employee name
                 employee_part = str(row_values[0]).replace('Employee:', '').strip()
-                if len(row_values) > 1 and row_values[1]:
-                    # Combine first and second column for full name
-                    new_employee = f"{employee_part} {row_values[1]}".strip()
-                else:
-                    new_employee = employee_part
+                second_col = row_values[1] if len(row_values) > 1 else None
+                new_employee = self._extract_employee_from_header(employee_part, second_col)
                 
                 # If we were processing a previous employee, log it
                 if current_employee and in_data_section:
@@ -459,22 +473,15 @@ class DataProcessor:
             first_col_name = keys[0] if keys else None
             if first_col_name and 'Employee:' in first_col_name and not current_employee:
                 employee_part = first_col_name.replace('Employee:', '').strip()
-                if ',' in employee_part:
-                    parts = employee_part.split(',')
-                    current_employee = ' '.join([p.strip() for p in parts])
-                else:
-                    current_employee = employee_part
+                current_employee = self._extract_employee_from_header(employee_part)
                 logger.info(f"Found employee in column name (row {row_num}): '{current_employee}'")
                 continue
             
             # Check for employee header in cell value
             if first_col and isinstance(first_col, str) and first_col.startswith('Employee:'):
                 employee_part = first_col.replace('Employee:', '').strip()
-                if ',' in employee_part:
-                    parts = employee_part.split(',')
-                    current_employee = ' '.join([p.strip() for p in parts])
-                else:
-                    current_employee = employee_part if second_col is None else f"{employee_part} {second_col}".strip()
+                second = str(second_col).strip() if second_col is not None else None
+                current_employee = self._extract_employee_from_header(employee_part, second)
                 logger.info(f"Found employee in cell value (row {row_num}): '{current_employee}'")
                 column_headers = {}
                 continue

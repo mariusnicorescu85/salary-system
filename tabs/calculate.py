@@ -211,15 +211,26 @@ def render(report_file, selected_shop, shop_config, config, append_to_airtable, 
                     # Show name mapping summary
                     if hasattr(processor, 'mapping_stats') and processor.mapping_stats:
                         stats = processor.mapping_stats
-                        if stats['mapped'] > 0 or stats['excluded'] > 0:
+                        if stats['mapped'] > 0 or stats['excluded'] > 0 or records:
                             with st.expander("📝 Name Mapping Summary", expanded=False):
                                 st.write(f"**Total processed:** {stats['total_processed']}")
                                 st.write(f"**Names mapped:** {stats['mapped']}")
+                                unchanged = stats['total_processed'] - stats['mapped'] - stats['excluded']
+                                if unchanged:
+                                    st.write(f"**Unchanged (already config name or no alias):** {unchanged}")
                                 st.write(f"**Names excluded:** {stats['excluded']}")
                                 if stats['mapping_details']:
                                     st.write("**Mappings applied:**")
-                                    for original, mapped in stats['mapping_details'].items():
+                                    for original, mapped in sorted(stats['mapping_details'].items()):
                                         st.write(f"  • `{original}` → `{mapped}`")
+                                unique_in_file = sorted({r['Employee'] for r in records})
+                                employees_lower_set = {e.lower() for e in employees.keys()}
+                                not_in_config = [e for e in unique_in_file if e.lower() not in employees_lower_set]
+                                if not_in_config:
+                                    st.warning(
+                                        f"**Report names not in employee config ({len(not_in_config)}):** "
+                                        + ", ".join(f"`{n}`" for n in not_in_config)
+                                    )
 
                 if not records:
                     st.error("❌ No valid records found in the file. Please check the file format.")

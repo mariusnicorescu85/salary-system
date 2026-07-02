@@ -1257,6 +1257,50 @@ class AirtableClient:
         # Plain employee name (non-link field).
         return emp_ref
 
+    def expand_employee_name_aliases(
+        self,
+        base_id: str,
+        name_mappings_table: str,
+        raw_aliases: Any,
+    ) -> List[str]:
+        """
+        Expand Employees.Name Mappings field to report-name strings.
+        Handles comma-separated text or linked Name Mappings record IDs.
+        """
+        if not raw_aliases:
+            return []
+        aliases: List[str] = []
+        rec_ids: List[str] = []
+        if isinstance(raw_aliases, str):
+            for part in raw_aliases.split(","):
+                part = part.strip()
+                if not part:
+                    continue
+                if part.startswith("rec"):
+                    rec_ids.append(part)
+                else:
+                    aliases.append(part)
+        elif isinstance(raw_aliases, list):
+            for item in raw_aliases:
+                part = str(item).strip()
+                if not part:
+                    continue
+                if part.startswith("rec"):
+                    rec_ids.append(part)
+                else:
+                    aliases.append(part)
+        if rec_ids:
+            table = self.api.table(base_id, name_mappings_table)
+            for rec_id in rec_ids:
+                try:
+                    rec = table.get(rec_id)
+                    report_name = (rec.get("fields", {}).get("Report Name") or "").strip()
+                    if report_name:
+                        aliases.append(report_name)
+                except Exception:
+                    continue
+        return aliases
+
     def get_name_mappings_for_shop(
         self,
         base_id: str,
@@ -1267,21 +1311,24 @@ class AirtableClient:
         """
         Fetch name mappings for a shop. Returns { report_name: employee_name }.
         Resolves linked Employee record IDs to names.
+        Includes any mapping whose linked employee belongs to this shop
+        (employee shop is authoritative; mapping-row Shop is not required).
         """
         id_to_name = self._get_employee_id_to_name(base_id, employees_table, shop_display_name)
+        if not id_to_name:
+            return {}
+        employee_names = set(id_to_name.values())
         table = self.api.table(base_id, name_mappings_table)
-        shop_esc = (shop_display_name or "").replace('\\', '\\\\').replace('"', '\\"')
         try:
-            rows = table.all(formula=self._shop_filter_formula("Shop", shop_esc))
+            rows = table.all()
         except Exception:
-            try:
-                rows = table.all()
-            except Exception:
-                return {}
-        out = {}
+            return {}
+        out: Dict[str, str] = {}
         for r in rows:
             fields = r.get("fields", {})
             report_name = (fields.get("Report Name") or "").strip()
+            if not report_name:
+                continue
             emp_ids = fields.get("Employees") or fields.get("Employee")
             emp = self._resolve_linked_employee_name(
                 base_id, employees_table, emp_ids, id_to_name
@@ -1292,8 +1339,9 @@ class AirtableClient:
                     if lookup_name:
                         emp = lookup_name
                         break
-            if report_name and emp:
-                out[report_name] = emp
+            if not emp or emp not in employee_names:
+                continue
+            out[report_name] = emp
         return out
 
     def get_wage_brackets(self, base_id: str, table_name: str) -> List[Dict]:
