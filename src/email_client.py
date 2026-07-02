@@ -157,8 +157,14 @@ _STAFF_BREAKDOWN_EMAIL_STYLES = """
   .commission-badge { display: inline-block; background: #ff6b6b; color: white; padding: 4px 8px; border-radius: 12px; font-size: 12px; margin-left: 10px; }
   .summary-box table td:first-child { text-align: left; }
   .mgmt-approval-banner { background: #e3f2fd; border: 2px solid #2196f3; padding: 16px; border-radius: 8px; margin: 0 0 24px 0; }
+  .mgmt-all-employees-summary { background: #fff; border: 1px solid #ddd; border-radius: 8px; padding: 16px; margin: 0 0 28px 0; box-shadow: 0 2px 4px rgba(0,0,0,0.06); }
+  .mgmt-all-employees-summary h3 { margin: 0 0 12px 0; font-size: 18px; }
+  .mgmt-summary-table { font-size: 13px; }
+  .mgmt-summary-table th { font-size: 12px; white-space: nowrap; }
+  .mgmt-summary-table td:first-child, .mgmt-summary-table th:first-child { text-align: left; }
+  .mgmt-summary-table .final-pay { font-weight: bold; color: #2e7d32; }
+  .mgmt-summary-table tr.total-row td { background: #f5f5f5; font-weight: bold; border-top: 2px solid #ccc; }
   .mgmt-employee-breakdown { margin: 32px 0; padding-top: 8px; border-top: 3px solid #ff8e53; }
-  .mgmt-approval-banner + .mgmt-employee-breakdown { border-top: none; margin-top: 0; padding-top: 0; }
 """
 
 _PAYMENT_DATE_LINE = "Payment is made on the <strong>10th of each month</strong>."
@@ -763,6 +769,79 @@ class EmailClient:
         """.strip()
         
         return html
+
+    def _build_management_all_employees_summary_html(self, results: Dict[str, Dict]) -> str:
+        """HTML table: one row per employee (same columns as Results → Monthly Summary)."""
+        rows: List[str] = []
+        totals = {
+            "hours": 0.0,
+            "sales": 0.0,
+            "hours_salary": 0.0,
+            "commission": 0.0,
+            "bonus": 0.0,
+            "final_pay": 0.0,
+        }
+        for emp_name in sorted(results.keys(), key=lambda n: str(n or "")):
+            emp_data = results[emp_name] or {}
+            summary = _normalize_summary(emp_data.get("summary"))
+            days = summary.get("WorkedDays", 0)
+            hours = _to_float(summary.get("WorkedHours", 0))
+            sales = _to_float(summary.get("Sales", 0))
+            hours_salary = _to_float(summary.get("HoursSalary", 0))
+            commission = _to_float(summary.get("TotalCommission", 0))
+            bonus = _to_float(summary.get("TotalBonus", 0))
+            final_pay = _to_float(summary.get("FinalPayment", 0))
+            totals["hours"] += hours
+            totals["sales"] += sales
+            totals["hours_salary"] += hours_salary
+            totals["commission"] += commission
+            totals["bonus"] += bonus
+            totals["final_pay"] += final_pay
+            rows.append(
+                f"<tr>"
+                f"<td>{emp_name}</td>"
+                f"<td>{days}</td>"
+                f"<td>{hours:.2f}</td>"
+                f"<td>{self.format_currency(sales)}</td>"
+                f"<td>{self.format_currency(hours_salary)}</td>"
+                f"<td>{self.format_currency(commission)}</td>"
+                f"<td>{self.format_currency(bonus)}</td>"
+                f'<td class="final-pay">{self.format_currency(final_pay)}</td>'
+                f"</tr>"
+            )
+        total_row = (
+            f'<tr class="total-row">'
+            f"<td>Total</td>"
+            f"<td>—</td>"
+            f"<td>{totals['hours']:.2f}</td>"
+            f"<td>{self.format_currency(totals['sales'])}</td>"
+            f"<td>{self.format_currency(totals['hours_salary'])}</td>"
+            f"<td>{self.format_currency(totals['commission'])}</td>"
+            f"<td>{self.format_currency(totals['bonus'])}</td>"
+            f'<td class="final-pay">{self.format_currency(totals["final_pay"])}</td>'
+            f"</tr>"
+        )
+        body_rows = "\n".join(rows) + "\n" + total_row
+        return f"""<div class="mgmt-all-employees-summary">
+    <h3>Summary (All Employees)</h3>
+    <table class="mgmt-summary-table">
+      <thead>
+        <tr>
+          <th>Employee</th>
+          <th>Days</th>
+          <th>Hours</th>
+          <th>Sales</th>
+          <th>Hours Salary</th>
+          <th>Commission</th>
+          <th>Bonus</th>
+          <th>Final Pay</th>
+        </tr>
+      </thead>
+      <tbody>
+{body_rows}
+      </tbody>
+    </table>
+  </div>"""
     
     def create_management_approval_email(
         self,
@@ -818,6 +897,7 @@ class EmailClient:
 
         sections_html = "\n".join(breakdown_sections)
         n_staff = len(breakdown_sections)
+        summary_html = self._build_management_all_employees_summary_html(results)
 
         return f"""<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0">
 <title>Salary Breakdowns for Approval - {shop_name}</title>
@@ -826,10 +906,10 @@ class EmailClient:
   <div class="mgmt-approval-banner">
     <h2 style="margin:0 0 8px 0;">Salary breakdowns for approval — {shop_name}</h2>
     <p style="margin:0;"><strong>Period:</strong> {month_name} · <strong>{n_staff}</strong> employee(s)</p>
-    <p style="margin:12px 0 0 0;">Each section below is <strong>the same breakdown email that will be sent to that employee</strong>
-    (including manual hours, bonuses, and Consultancy/Payroll invoice wording). Review and approve before using
-    <em>Send to all staff</em>.</p>
+    <p style="margin:12px 0 0 0;">Review the summary table below, then each employee section (the same breakdown they will receive).
+    Approve before using <em>Send to all staff</em>.</p>
   </div>
+{summary_html}
 {sections_html}
 </body></html>""".strip()
     
