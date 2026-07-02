@@ -840,6 +840,20 @@ def _load_employee_config_from_airtable(
     name_mapping = client.get_name_mappings_for_shop(
         base_id, mappings_table, emp_table, shop_display_name
     )
+
+    # Merge per-employee aliases from Employees.Name Mappings (comma-separated report names).
+    for rec in emp_records:
+        emp_name = (rec.get("Name") or "").strip()
+        if not emp_name:
+            continue
+        raw_aliases = rec.get("Name Mappings") or rec.get("name_mappings") or ""
+        aliases = []
+        if isinstance(raw_aliases, str):
+            aliases = [a.strip() for a in raw_aliases.split(",") if a.strip()]
+        elif isinstance(raw_aliases, list):
+            aliases = [str(a).strip() for a in raw_aliases if str(a).strip()]
+        for alias in aliases:
+            name_mapping.setdefault(alias, emp_name)
     
     # Fetch sales bonus thresholds
     sales_bonus_by_emp = client.get_sales_bonus_thresholds_for_shop(

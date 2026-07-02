@@ -1223,6 +1223,40 @@ class AirtableClient:
             pass
         return id_to_name
 
+    def _resolve_linked_employee_name(
+        self,
+        base_id: str,
+        employees_table: str,
+        emp_ref: Any,
+        id_to_name: Dict[str, str],
+    ) -> Optional[str]:
+        """Resolve a linked Employees field (record ID or name) to the canonical Name."""
+        if emp_ref is None or emp_ref == "":
+            return None
+        if isinstance(emp_ref, list):
+            if not emp_ref:
+                return None
+            emp_ref = emp_ref[0]
+        if not isinstance(emp_ref, str):
+            return None
+        emp_ref = emp_ref.strip()
+        if not emp_ref:
+            return None
+        if emp_ref in id_to_name:
+            return id_to_name[emp_ref]
+        # Linked record ID not in shop-filtered map — fetch directly (multi-shop employees).
+        if emp_ref.startswith("rec"):
+            try:
+                rec = self.api.table(base_id, employees_table).get(emp_ref)
+                name = (rec.get("fields", {}).get("Name") or "").strip()
+                if name:
+                    id_to_name[emp_ref] = name
+                    return name
+            except Exception:
+                return None
+        # Plain employee name (non-link field).
+        return emp_ref
+
     def get_name_mappings_for_shop(
         self,
         base_id: str,
@@ -1249,11 +1283,15 @@ class AirtableClient:
             fields = r.get("fields", {})
             report_name = (fields.get("Report Name") or "").strip()
             emp_ids = fields.get("Employees") or fields.get("Employee")
-            emp = None
-            if isinstance(emp_ids, list) and emp_ids and isinstance(emp_ids[0], str):
-                emp = id_to_name.get(emp_ids[0])
-            elif isinstance(emp_ids, str):
-                emp = id_to_name.get(emp_ids)
+            emp = self._resolve_linked_employee_name(
+                base_id, employees_table, emp_ids, id_to_name
+            )
+            if not emp:
+                for lookup_field in ("Name (from Employees)", "Name (from Employee)"):
+                    lookup_name = (fields.get(lookup_field) or "").strip()
+                    if lookup_name:
+                        emp = lookup_name
+                        break
             if report_name and emp:
                 out[report_name] = emp
         return out

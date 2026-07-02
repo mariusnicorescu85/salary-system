@@ -338,6 +338,11 @@ def render(report_file, selected_shop, shop_config, config, append_to_airtable, 
                     employees_lower = {k.lower(): k for k in employees.keys()}
 
                     for idx, (emp_name, emp_records) in enumerate(employee_records.items()):
+                        # Resolve via name mapping (report alias -> config name)
+                        resolved_name = processor.map_employee_name(emp_name) or emp_name
+                        if resolved_name != emp_name:
+                            emp_name = resolved_name
+
                         # Check if employee is in config (case-insensitive)
                         emp_name_lower = emp_name.lower()
                         if emp_name_lower not in employees_lower:
