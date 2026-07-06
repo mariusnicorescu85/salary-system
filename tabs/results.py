@@ -354,7 +354,7 @@ def render(config):
                                 invoice_submission_email=invoice_email,
                                 employment=emp_cfg.get("employment", ""),
                             )
-                            subject = f"{current_shop_config.get('name', 'Shop')} - Salary Breakdown for {emp_name}"
+                            subject = f"{current_shop_config.get('name', 'Shop')} - Payment Breakdown for {emp_name}"
                             if email_client.send_email(
                                 to_email=emp_email,
                                 subject=subject,
@@ -409,7 +409,7 @@ def render(config):
                             invoice_submission_email=invoice_email,
                             employment=employee_info.get("employment", ""),
                         )
-                        subject = f"{current_shop_config.get('name', 'Shop')} - Salary Breakdown for {selected_employee}"
+                        subject = f"{current_shop_config.get('name', 'Shop')} - Payment Breakdown for {selected_employee}"
                         success = email_client.send_email(
                             to_email=employee_email_input,
                             subject=subject,
@@ -529,7 +529,7 @@ def render(config):
                                     invoice_submission_email=mgmt_invoice_email,
                                     employment=emp_info.get("employment", ""),
                                 )
-                                subject = f"{current_shop_config.get('name', 'Shop')} - Salary Breakdown for {emp_name}"
+                                subject = f"{current_shop_config.get('name', 'Shop')} - Payment Breakdown for {emp_name}"
                                 for r in recipients:
                                     total_attempts += 1
                                     if email_client.send_email(

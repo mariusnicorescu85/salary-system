@@ -266,7 +266,7 @@ class EmailClient:
         </head>
         <body>
             <div class="container">
-                <h2>Salary Breakdown - {employee_name}</h2>
+                <h2>Payment Breakdown - {employee_name}</h2>
                 <p><strong>Period:</strong> {month_name}</p>
                 
                 <div class="summary-section">
@@ -286,7 +286,7 @@ class EmailClient:
                         <tr><td>Rate per Hour</td><td class="currency">{self.format_currency(summary.get('RatePerHour', 0))}</td></tr>
         """
         html += f"""
-                        <tr><td>Hours Salary</td><td class="currency">{self.format_currency(summary.get('HoursSalary', 0))}</td></tr>
+                        <tr><td>Hours Pay</td><td class="currency">{self.format_currency(summary.get('HoursSalary', 0))}</td></tr>
         """
         if wage_breakdown:
             for i, period in enumerate(wage_breakdown, 1):
@@ -519,7 +519,7 @@ class EmailClient:
         if pt_key == "dave_package":
             hourly_rate_row = ""
 
-        salary_row_label = "Prorated base (package ÷ reference days × days worked):" if pt_key == "dave_package" else "Hours Salary:"
+        salary_row_label = "Prorated base (package ÷ reference days × days worked):" if pt_key == "dave_package" else "Hours Pay:"
         dave_detail_rows = ""
         if pt_key == "dave_package":
             dave_detail_rows = self._html_dave_package_breakdown_rows(summary, daily_records)
