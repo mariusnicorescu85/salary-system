@@ -309,8 +309,8 @@ class CalculationEngine:
             result['PaymentType'] = 'NetCommissionTiered'
 
         elif payment_type == 'isaac_package':
-            # Isaac: 30% NET commission + conditional daily transport
-            commission = self.calculate_rebecca_commission(
+            # Isaac: tiered commission on gross sales + conditional daily transport
+            commission = self.calculate_flat_rate_tiered_commission(
                 total_sales,
                 employee.get('commission_tiers', [])
             )

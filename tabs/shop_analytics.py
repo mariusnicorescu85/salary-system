@@ -141,7 +141,7 @@ def render(selected_shop, shop_config, config):
                 if payment_type in ("net_commission_tiered", "NetCommissionTiered"):
                     return "NET 30-33%"
                 if payment_type in ("isaac_package", "IsaacPackage"):
-                    return "30% NET + Transport + Milestone"
+                    return "30% Gross + Transport + Milestone"
                 if payment_type in ("alex_hybrid", "AlexOldStructure", "AlexNewStructure"):
                     return "25-27% + Rent"
                 if payment_type in ("hybrid_daily_max", "HybridDailyMax"):
