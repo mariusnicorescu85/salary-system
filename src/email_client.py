@@ -35,6 +35,7 @@ def _normalize_payment_type_key(payment_type) -> str:
         "isaacpackage": "isaac_package",
         "alexoldstructure": "alex_hybrid",
         "alexnewstructure": "alex_hybrid",
+        "alexpackage": "alex_hybrid",
         "salesonly": "sales_only",
     }
     return pascal.get(key, key)
@@ -340,9 +341,7 @@ class EmailClient:
             html += f'<tr><td>Deductions</td><td class="currency">-{self.format_currency(summary.get("Deductions", 0))}</td></tr>'
         
         if _is_positive(summary.get('Rent', 0)):
-            pt = (summary.get('PaymentType') or '').lower()
-            rent_fmt = self.format_currency(summary.get("Rent", 0))
-            html += f'<tr><td>Rent</td><td class="currency">{"" if pt == "alex_hybrid" else "-"}{rent_fmt}</td></tr>'
+            html += f'<tr><td>Rent</td><td class="currency">-{self.format_currency(summary.get("Rent", 0))}</td></tr>'
         
         if _is_positive(summary.get('Advance', 0)):
             html += f'<tr><td>Advance</td><td class="currency">-{self.format_currency(summary.get("Advance", 0))}</td></tr>'
@@ -447,6 +446,35 @@ class EmailClient:
                 f'<td class="amount">{d0} → {d1}</td></tr>'
             )
         return "".join(parts)
+
+    def _html_alex_package_breakdown_rows(self, summary: Dict[str, Any]) -> str:
+        """Monthly Overview HTML rows for alex_hybrid (base + full-month shop %)."""
+        def _fkey(key: str):
+            v = summary.get(key)
+            if v is None or v == "":
+                return None
+            try:
+                return _to_float(v)
+            except (TypeError, ValueError):
+                return None
+
+        shop_gross = _fkey("ShopMonthSalesGross")
+        shop_comm = _fkey("ShopMonthCommission")
+        if shop_comm is None:
+            shop_comm = _fkey("TotalCommission")
+
+        parts = []
+        if shop_gross is not None and shop_gross > 0:
+            parts.append(
+                f'<tr><td><strong>Shop sales (full month):</strong></td>'
+                f'<td class="amount">{self.format_currency(shop_gross)}</td></tr>'
+            )
+        if shop_comm is not None and shop_comm > 0:
+            parts.append(
+                f'<tr><td><strong>Shop commission (5%):</strong></td>'
+                f'<td class="amount">{self.format_currency(shop_comm)}</td></tr>'
+            )
+        return "".join(parts)
     
     def _create_opatra_style_email(self, employee_name: str, summary: Dict,
                                    daily_records: List[Dict], bonus_breakdown: Dict,
@@ -516,13 +544,16 @@ class EmailClient:
             )
             wage_breakdown_html = f'<tr style="background: #f5f5f5; font-weight: bold; border-top: 2px solid #9e9e9e;"><td colspan="2" style="padding: 12px 8px;">📋 Wage Bracket Breakdown (rate varied mid-month)</td></tr>{rows}'
         hourly_rate_row = "" if wage_breakdown else f'<tr><td><strong>Hourly Rate:</strong></td><td class="amount">{self.format_currency(summary.get("RatePerHour", 0))}</td></tr>'
-        if pt_key == "dave_package":
+        if pt_key in ("dave_package", "alex_hybrid"):
             hourly_rate_row = ""
 
-        salary_row_label = "Prorated base (package ÷ reference days × days worked):" if pt_key == "dave_package" else "Hours Pay:"
+        salary_row_label = "Prorated base (package ÷ reference days × days worked):" if pt_key == "dave_package" else "Base salary:" if pt_key == "alex_hybrid" else "Hours Pay:"
         dave_detail_rows = ""
         if pt_key == "dave_package":
             dave_detail_rows = self._html_dave_package_breakdown_rows(summary, daily_records)
+        alex_detail_rows = ""
+        if pt_key == "alex_hybrid":
+            alex_detail_rows = self._html_alex_package_breakdown_rows(summary)
         isaac_detail_rows = ""
         if pt_key == "isaac_package":
             transport_total = _to_float(
@@ -552,16 +583,10 @@ class EmailClient:
         rent_amt = _to_float(summary.get("Rent", 0))
         rent_html = ""
         if rent_amt != 0:
-            if pt_key == "alex_hybrid":
-                rent_html = (
-                    f'<tr><td><strong>Rent (chair / structure):</strong></td>'
-                    f'<td class="amount">{self.format_currency(abs(rent_amt))}</td></tr>'
-                )
-            else:
-                rent_html = (
-                    f'<tr><td><strong>Rent:</strong></td>'
-                    f'<td class="amount" style="color: #d32f2f;">-{self.format_currency(abs(rent_amt))}</td></tr>'
-                )
+            rent_html = (
+                f'<tr><td><strong>Rent:</strong></td>'
+                f'<td class="amount" style="color: #d32f2f;">-{self.format_currency(abs(rent_amt))}</td></tr>'
+            )
         
         # Hours + Bonus or Commission + Bonus row (feeds invoice amount when advance was paid)
         if is_commission:
@@ -722,6 +747,7 @@ class EmailClient:
         {hourly_rate_row}
         <tr><td><strong>{salary_row_label}</strong></td><td class="amount">{self.format_currency(hours_salary)}</td></tr>
         {dave_detail_rows}
+        {alex_detail_rows}
         {isaac_detail_rows}
         {wage_breakdown_html}
         {bonus_section_html}

@@ -211,6 +211,8 @@ def render(config):
             hours_salary_label = (
                 'Prorated base (monthly ÷ reference days × days worked)'
                 if pt_norm == 'dave_package'
+                else 'Base salary'
+                if pt_norm == 'alex_hybrid'
                 else 'Hours Salary'
             )
             breakdown_data = [
@@ -247,8 +249,19 @@ def render(config):
                 d0, d1 = summary.get('ShopRangeFirstDate') or '', summary.get('ShopRangeLastDate') or ''
                 if d0 and d1:
                     breakdown_data.append(['Shop range (dates)', f"{d0} → {d1}"])
+            if pt_norm == 'alex_hybrid':
+                if summary.get('ShopMonthSalesGross') not in (None, '', 0):
+                    try:
+                        breakdown_data.append(['Shop sales (full month)', format_currency(float(summary.get('ShopMonthSalesGross')))])
+                    except (TypeError, ValueError):
+                        pass
+                if summary.get('ShopMonthCommission') not in (None, '', 0):
+                    try:
+                        breakdown_data.append(['Shop commission (5%)', format_currency(float(summary.get('ShopMonthCommission')))])
+                    except (TypeError, ValueError):
+                        pass
             wage_breakdown = summary.get('WageBracketBreakdown', [])
-            if not wage_breakdown and pt_norm != 'dave_package':
+            if not wage_breakdown and pt_norm not in ('dave_package', 'alex_hybrid'):
                 breakdown_data.insert(-1, ['Rate per Hour', format_currency(summary.get('RatePerHour', 0))])
             if wage_breakdown:
                 for i, period in enumerate(wage_breakdown, 1):
@@ -287,10 +300,7 @@ def render(config):
                 breakdown_data.append(['Deductions', format_currency(-ded)])
 
             if summary.get('Rent', 0) > 0:
-                pt = (summary.get('PaymentType') or '').lower()
-                # For alex_hybrid, rent is added to pay (chair rent); for others it's a deduction
-                rent_display = format_currency(summary.get('Rent', 0)) if pt == 'alex_hybrid' else format_currency(-summary.get('Rent', 0))
-                breakdown_data.append(['Rent', rent_display])
+                breakdown_data.append(['Rent', format_currency(-summary.get('Rent', 0))])
 
             if summary.get('Advance', 0) > 0:
                 breakdown_data.append(['Advance', format_currency(-summary.get('Advance', 0))])

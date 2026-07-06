@@ -199,37 +199,6 @@ class CalculationEngine:
                 return float(bonus_tier.get('bonus_amount', 0) or 0)
         return 0.0
     
-    def calculate_alex_commission(self, total_sales: float, date: str, employee: Dict) -> float:
-        """Calculate Alex's commission based on date (old vs new structure)"""
-        if total_sales <= 0:
-            return 0.0
-        
-        record_date = datetime.strptime(date, '%Y-%m-%d')
-        old_structure_date = datetime.strptime(employee.get('old_structure', {}).get('effective_date', '2025-11-01'), '%Y-%m-%d')
-        new_structure_date = datetime.strptime(employee.get('new_structure', {}).get('effective_date', '2025-11-04'), '%Y-%m-%d')
-        
-        if record_date < new_structure_date:
-            # Old structure: Flat 27% commission
-            old_structure = employee.get('old_structure', {})
-            commission_rate = old_structure.get('commission_rate', 0.27)
-            return total_sales * commission_rate
-        else:
-            # New structure: Tiered commission
-            new_structure = employee.get('new_structure', {})
-            tiers = new_structure.get('commission_tiers', [])
-            if total_sales > 1500:
-                # Find tier 2 (27% for £1,501+)
-                for tier in tiers:
-                    if tier.get('threshold', 0) == 1500:
-                        return total_sales * tier.get('rate', 0.27)
-            else:
-                # Tier 1 (25% for £0-£1,500)
-                for tier in tiers:
-                    if tier.get('threshold', 0) == 0:
-                        return total_sales * tier.get('rate', 0.25)
-        
-        return 0.0
-    
     def calculate_daily_payment(self, employee_name: str, hours: float, sales: float, 
                                addl_sales: float, date: str) -> Dict:
         """Calculate payment for a single day"""
@@ -393,17 +362,10 @@ class CalculationEngine:
             result['PaymentType'] = 'FlatRateTieredWithTransport'
         
         elif payment_type == 'alex_hybrid':
-            # Alex's hybrid structure (date-based)
-            commission = self.calculate_alex_commission(total_sales, date, employee)
-            result['Base'] = 0.0  # Transport and rent calculated monthly
-            result['Commission'] = commission
-            # Determine which structure based on date
-            record_date = datetime.strptime(date, '%Y-%m-%d')
-            new_structure_date = datetime.strptime(employee.get('new_structure', {}).get('effective_date', '2025-11-04'), '%Y-%m-%d')
-            if record_date < new_structure_date:
-                result['PaymentType'] = 'AlexOldStructure'
-            else:
-                result['PaymentType'] = 'AlexNewStructure'
+            # Alex: base + shop % calculated monthly only
+            result['Base'] = 0.0
+            result['Commission'] = 0.0
+            result['PaymentType'] = 'AlexPackage'
         
         # Round all monetary/numeric values to 2 decimal places
         for key in ('Hours', 'Sales', 'AddlSales', 'HrlyRate', 'Base', 'Commission'):
@@ -474,8 +436,9 @@ class CalculationEngine:
         # Initialize variables that may be used in summary
         monthly_max = 0.0
         method = None
-        alex_transport = 0.0
-        alex_rent = 0.0
+        alex_shop_month_sales = 0.0
+        alex_shop_commission = 0.0
+        alex_monthly_base = 0.0
         isaac_transport_total = 0.0
         isaac_sales_bonus = 0.0
 
@@ -608,29 +571,28 @@ class CalculationEngine:
                 final_payment = base_payment - deductions - rent - advance
         
         elif payment_type == 'alex_hybrid':
-            # Alex: Transport + Commission + Base (rent) + bonus + manual hours - deductions
-            transport = employee.get('transport', 0)
-            alex_transport = transport
-            
-            # Check if any days use new structure
-            new_structure_date = datetime.strptime(employee.get('new_structure', {}).get('effective_date', '2025-11-04'), '%Y-%m-%d')
-            has_new_structure = any(
-                datetime.strptime(r['Date'], '%Y-%m-%d') >= new_structure_date 
-                for r in daily_records
-            )
-            
-            rent_amount = 0.0
-            if has_new_structure:
-                # Calculate rent based on total sales
-                rent_tiers = employee.get('new_structure', {}).get('rent_tiers', [])
-                for rent_tier in sorted(rent_tiers, key=lambda x: x.get('sales_threshold', 0), reverse=True):
-                    if adjusted_sales >= rent_tier.get('sales_threshold', 0):
-                        rent_amount = rent_tier.get('rent_amount', 0)
-                        break
-            alex_rent = rent_amount
-            
-            base_payment = transport + total_commission + rent_amount + total_bonus + manual_hours_pay
-            final_payment = base_payment - deductions - advance
+            # Alex: full monthly base + shop % on all shop sales in the report month
+            alex_monthly_base = float(employee.get('monthly_base', 2500))
+            shop_rate_raw = employee.get('shop_commission_rate')
+            if shop_rate_raw is None or shop_rate_raw == '':
+                shop_rate = 0.05
+            else:
+                shop_rate = float(shop_rate_raw)
+
+            totals_map = shop_daily_sales_totals or {}
+            alex_shop_month_sales = sum(float(v or 0) for v in totals_map.values())
+            alex_shop_commission = alex_shop_month_sales * shop_rate
+
+            hours_salary = alex_monthly_base
+            total_commission = alex_shop_commission
+            base_payment = alex_monthly_base + alex_shop_commission
+            final_payment = base_payment
+            total_bonus = 0
+            manual_hours = 0
+            manual_hours_pay = 0
+            deductions = 0
+            rent = 0
+            advance = 0
         
         elif payment_type == 'sales_only':
             # Pay is external/not calculated here; sales still count toward shop totals
@@ -671,9 +633,7 @@ class CalculationEngine:
             summary_wage_breakdown.sort(key=lambda x: x['date_from'])
         
         # Individual bonus breakdown for detailed view
-        if payment_type == 'alex_hybrid':
-            transport_for_breakdown = alex_transport
-        elif payment_type == 'isaac_package':
+        if payment_type == 'isaac_package':
             transport_for_breakdown = isaac_transport_total
         else:
             transport_for_breakdown = bonus_info.get('transportFuel', 0)
@@ -688,9 +648,10 @@ class CalculationEngine:
             'ExtraBonus': bonus_info.get('extraBonus', 0),
             'DailyAllowance': bonus_info.get('dailyAllowance', 0)
         }
+        if payment_type == 'alex_hybrid':
+            bonus_breakdown = {k: 0 for k in bonus_breakdown}
         
-        # For alex_hybrid, use rent from sales tiers; otherwise use bonus_info
-        rent_for_summary = alex_rent if payment_type == 'alex_hybrid' else rent
+        rent_for_summary = rent
         summary = {
             'Employee': employee_name,
             'WorkedDays': worked_days,
@@ -733,5 +694,10 @@ class CalculationEngine:
         if payment_type == 'isaac_package':
             summary['IsaacTransportTotal'] = round(isaac_transport_total, 2)
             summary['SalesMilestoneBonus'] = round(isaac_sales_bonus, 2)
+
+        if payment_type == 'alex_hybrid':
+            summary['MonthlyBasePay'] = round(alex_monthly_base, 2)
+            summary['ShopMonthSalesGross'] = round(alex_shop_month_sales, 2)
+            summary['ShopMonthCommission'] = round(alex_shop_commission, 2)
         
         return summary
